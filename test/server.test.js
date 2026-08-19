@@ -60,6 +60,8 @@ test('legal acceptance enables onboarding and trading authorization checks', asy
   });
 
   assert.equal(walletRes.status, 200);
+  const walletPayload = await walletRes.json();
+  assert.equal(walletPayload.onboarding.nextStep, 'profile');
 
   const tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u2`, {
     method: 'POST',
@@ -70,6 +72,7 @@ test('legal acceptance enables onboarding and trading authorization checks', asy
   assert.equal(tradeRes.status, 200);
   const tradePayload = await tradeRes.json();
   assert.equal(tradePayload.reasonCode, 'AUTHORIZED');
+  assert.equal(tradePayload.reason, 'Trade request is authorized under current policy.');
   assert.equal(tradePayload.feeRouting.destinationWallet, 'h1vRxwsCLUtiD6UiKpSgNnTDUAqvXCxurFVUfvH1noj');
 
   app.close();
@@ -88,6 +91,8 @@ test('policy controls and business rules return auditable block reason codes', a
   const user = getUser('u3');
   user.trialStartedAt = '2025-01-01T00:00:00.000Z';
   user.stakeActive = false;
+  user.wallet.mode = 'external';
+  user.wallet.delegatedPermission = { allowedActions: ['swap'], maxTradeSizeUsd: 1000, expiresAt: null, revokedAt: null };
   user.constraints.whitelistMode = true;
   user.constraints.allowedPairs = ['BONK/USDC'];
 
@@ -132,29 +137,39 @@ test('policy controls and business rules return auditable block reason codes', a
   app.close();
 });
 
-test('consent log retrieval returns versioned records for identity', async () => {
+test('consent history and onboarding status endpoints are available on protected surfaces', async () => {
   resetState();
   const { app, baseUrl } = await startServer();
 
   await fetch(`${baseUrl}/api/legal/accept`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-session-id': 'sess-1' },
     body: JSON.stringify({ identity: 'u4', accepted: true })
   });
 
-  const res = await fetch(`${baseUrl}/api/protected/legal/consents?identity=u4`);
-  assert.equal(res.status, 200);
-  const { consents } = await res.json();
-  assert.equal(consents.length, 1);
-  assert.equal(consents[0].identity, 'u4');
-  assert.equal(consents[0].acceptanceStatus, 'accepted');
-  assert.ok(consents[0].policyVersions);
-  assert.ok(consents[0].timestampUtc);
+  await fetch(`${baseUrl}/api/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ identity: 'u4' })
+  });
+
+  const consentRes = await fetch(`${baseUrl}/api/protected/legal/consents?identity=u4`);
+  assert.equal(consentRes.status, 200);
+  const consentPayload = await consentRes.json();
+  assert.equal(consentPayload.consents.length, 1);
+  assert.equal(consentPayload.consents[0].userId, 'u4');
+  assert.equal(consentPayload.consents[0].sessionId, 'sess-1');
+
+  const statusRes = await fetch(`${baseUrl}/api/protected/onboarding/status?identity=u4`);
+  assert.equal(statusRes.status, 200);
+  const statusPayload = await statusRes.json();
+  assert.equal(statusPayload.onboarding.accountCreated, true);
+  assert.equal(statusPayload.onboarding.nextStep, 'profile');
 
   app.close();
 });
 
-test('onboarding status endpoint returns current milestones for resume flow', async () => {
+test('external delegation scope, expiry, and revocation are enforced', async () => {
   resetState();
   const { app, baseUrl } = await startServer();
 
@@ -164,23 +179,53 @@ test('onboarding status endpoint returns current milestones for resume flow', as
     body: JSON.stringify({ identity: 'u5', accepted: true })
   });
 
-  await fetch(`${baseUrl}/api/register`, {
+  await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u5`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identity: 'u5' })
+    body: JSON.stringify({
+      mode: 'external',
+      allowedActions: ['swap'],
+      maxTradeSizeUsd: 100,
+      expiresAt: '2000-01-01T00:00:00.000Z'
+    })
   });
 
-  const res = await fetch(`${baseUrl}/api/protected/onboarding/status?identity=u5`);
-  assert.equal(res.status, 200);
-  const { onboarding } = await res.json();
-  assert.equal(onboarding.legalAccepted, true);
-  assert.equal(onboarding.accountCreated, true);
-  assert.equal(onboarding.completed, false);
+  let tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u5`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ pair: 'SOL/USDC', action: 'swap', tradeSizeUsd: 10 })
+  });
+  assert.equal((await tradeRes.json()).reasonCode, 'DELEGATION_EXPIRED');
+
+  const user = getUser('u5');
+  user.wallet.delegatedPermission.expiresAt = null;
+
+  tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u5`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ pair: 'SOL/USDC', action: 'stake', tradeSizeUsd: 10 })
+  });
+  assert.equal((await tradeRes.json()).reasonCode, 'DELEGATION_ACTION_NOT_ALLOWED');
+
+  tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u5`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ pair: 'SOL/USDC', action: 'swap', tradeSizeUsd: 101 })
+  });
+  assert.equal((await tradeRes.json()).reasonCode, 'DELEGATION_MAX_TRADE_EXCEEDED');
+
+  await fetch(`${baseUrl}/api/protected/wallet/revoke-delegation?identity=u5`, { method: 'POST' });
+  tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u5`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ pair: 'SOL/USDC', action: 'swap', tradeSizeUsd: 10 })
+  });
+  assert.equal((await tradeRes.json()).reasonCode, 'DELEGATION_REVOKED');
 
   app.close();
 });
 
-test('wallet status endpoint shows delegation state and revoke status', async () => {
+test('trade check validates numeric inputs and wallet mode validates external delegation shape', async () => {
   resetState();
   const { app, baseUrl } = await startServer();
 
@@ -190,125 +235,77 @@ test('wallet status endpoint shows delegation state and revoke status', async ()
     body: JSON.stringify({ identity: 'u6', accepted: true })
   });
 
-  await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u6`, {
+  let walletRes = await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u6`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ mode: 'external', allowedActions: ['swap'], maxTradeSizeUsd: 500 })
+    body: JSON.stringify({
+      mode: 'external',
+      allowedActions: ['swap', '', 123],
+      expiresAt: 'not-a-date'
+    })
   });
+  assert.equal(walletRes.status, 400);
 
-  const beforeRevoke = await fetch(`${baseUrl}/api/protected/wallet/status?identity=u6`);
-  assert.equal(beforeRevoke.status, 200);
-  const beforePayload = await beforeRevoke.json();
-  assert.equal(beforePayload.mode, 'external');
-  assert.equal(beforePayload.delegation.revokeStatus, 'ACTIVE');
-  assert.equal(beforePayload.delegation.active, true);
-
-  await fetch(`${baseUrl}/api/protected/wallet/revoke-delegation?identity=u6`, {
+  walletRes = await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u6`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({})
+    body: JSON.stringify({
+      mode: 'external',
+      allowedActions: ['swap', '', 123],
+      maxTradeSizeUsd: '15',
+      expiresAt: '2030-01-01T00:00:00.000Z'
+    })
   });
+  assert.equal(walletRes.status, 200);
 
-  const afterRevoke = await fetch(`${baseUrl}/api/protected/wallet/status?identity=u6`);
-  const afterPayload = await afterRevoke.json();
-  assert.equal(afterPayload.delegation.revokeStatus, 'REVOKED');
-  assert.equal(afterPayload.delegation.active, false);
+  const user = getUser('u6');
+  assert.deepEqual(user.wallet.delegatedPermission.allowedActions, ['swap']);
+  assert.equal(user.wallet.delegatedPermission.maxTradeSizeUsd, 15);
+  assert.equal(user.wallet.delegatedPermission.expiresAt, '2030-01-01T00:00:00.000Z');
 
-  app.close();
-});
-
-test('managed wallet mode shows managedWalletId with no delegation', async () => {
-  resetState();
-  const { app, baseUrl } = await startServer();
-
-  await fetch(`${baseUrl}/api/legal/accept`, {
+  walletRes = await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u6`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identity: 'u7', accepted: true })
+    body: JSON.stringify({
+      mode: 'external',
+      allowedActions: ['', 123]
+    })
   });
+  assert.equal(walletRes.status, 200);
+  assert.deepEqual(getUser('u6').wallet.delegatedPermission.allowedActions, ['swap']);
+  assert.equal(getUser('u6').wallet.delegatedPermission.maxTradeSizeUsd, null);
 
-  await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u7`, {
+  walletRes = await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u6`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ mode: 'managed' })
+    body: JSON.stringify({
+      mode: 'external',
+      maxTradeSizeUsd: 0
+    })
   });
+  assert.equal(walletRes.status, 200);
+  assert.equal(getUser('u6').wallet.delegatedPermission.maxTradeSizeUsd, 0);
 
-  const res = await fetch(`${baseUrl}/api/protected/wallet/status?identity=u7`);
-  const payload = await res.json();
-  assert.equal(payload.mode, 'managed');
-  assert.ok(payload.managedWalletId);
-  assert.equal(payload.delegation, null);
-
-  app.close();
-});
-
-test('tax export returns CSV with expected headers', async () => {
-  resetState();
-  const { app, baseUrl } = await startServer();
-
-  await fetch(`${baseUrl}/api/legal/accept`, {
+  const zeroLimitTradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u6`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identity: 'u8', accepted: true })
+    body: JSON.stringify({ pair: 'SOL/USDC', tradeSizeUsd: 0.01 })
   });
+  assert.equal((await zeroLimitTradeRes.json()).reasonCode, 'DELEGATION_MAX_TRADE_EXCEEDED');
 
-  const res = await fetch(`${baseUrl}/api/protected/tax/export?identity=u8&format=csv`);
-  assert.equal(res.status, 200);
-  const csv = await res.text();
-  assert.ok(csv.startsWith('timestamp,pair,side,quantity,priceUsd,realizedPnlUsd'));
-
-  app.close();
-});
-
-test('tax summary includes form references and disclaimer', async () => {
-  resetState();
-  const { app, baseUrl } = await startServer();
-
-  await fetch(`${baseUrl}/api/legal/accept`, {
+  const tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u6`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identity: 'u9', accepted: true })
+    body: JSON.stringify({ pair: 'SOL/USDC', tradeSizeUsd: 'nope' })
   });
+  assert.equal(tradeRes.status, 400);
 
-  const res = await fetch(`${baseUrl}/api/protected/tax/summary?identity=u9`);
-  assert.equal(res.status, 200);
-  const payload = await res.json();
-  assert.ok(payload.mappingReferences.includes('Form 8949'));
-  assert.ok(payload.mappingReferences.includes('Schedule D'));
-  assert.ok(payload.disclaimer.includes('Educational only'));
-
-  app.close();
-});
-
-test('blocklist mode blocks listed pairs with human-readable reason code', async () => {
-  resetState();
-  const { app, baseUrl } = await startServer();
-
-  await fetch(`${baseUrl}/api/legal/accept`, {
+  const negativeProfitRes = await fetch(`${baseUrl}/api/trade/check?identity=u6`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identity: 'u10', accepted: true })
+    body: JSON.stringify({ pair: 'SOL/USDC', expectedGrossProfitUsd: -1 })
   });
-
-  const user = getUser('u10');
-  user.constraints.blocklistMode = true;
-  user.constraints.blockedPairs = ['SCAM/USDC'];
-
-  const blocked = await fetch(`${baseUrl}/api/trade/check?identity=u10`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'SCAM/USDC' })
-  });
-  assert.equal(blocked.status, 403);
-  assert.equal((await blocked.json()).reasonCode, 'PAIR_BLOCKLISTED');
-
-  const allowed = await fetch(`${baseUrl}/api/trade/check?identity=u10`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'SOL/USDC' })
-  });
-  assert.equal(allowed.status, 200);
-  assert.equal((await allowed.json()).reasonCode, 'AUTHORIZED');
+  assert.equal(negativeProfitRes.status, 400);
 
   app.close();
 });

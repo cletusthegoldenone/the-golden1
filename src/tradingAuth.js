@@ -1,10 +1,22 @@
-const { JUPITER_FEE_WALLET } = require('./config');
+const {
+  JUPITER_FEE_WALLET,
+  FEE_ROUTING_ENABLED,
+  FEE_ROUTING_BPS,
+  TRIAL_DAYS,
+  MONTHLY_GROSS_PROFIT_CAP_USD,
+  WEEKLY_PASS_USDC
+} = require('./config');
 const { state } = require('./store');
 const { validatePairByPolicy } = require('./policyValidation');
 
-const TRIAL_DAYS = 30;
-const MONTHLY_GROSS_PROFIT_CAP_USD = 10000;
-const WEEKLY_PASS_USDC = 20;
+function deny(reasonCode, reason, extra = {}) {
+  return {
+    allowed: false,
+    reasonCode,
+    reason,
+    ...extra
+  };
+}
 
 function isWithinTrial(user, now = new Date()) {
   const start = new Date(user.trialStartedAt);
@@ -19,35 +31,70 @@ function hasValidWeeklyPass(user, now = new Date()) {
   return diffDays <= 7;
 }
 
-function evaluateTradeAuthorization(user, { pair, expectedGrossProfitUsd = 0 }, now = new Date()) {
+function evaluateTradeAuthorization(
+  user,
+  { pair, expectedGrossProfitUsd = 0, action = 'swap', tradeSizeUsd = 0 },
+  now = new Date()
+) {
   if (state.operatorFlags.killSwitch) {
-    return { allowed: false, reasonCode: 'GLOBAL_KILL_SWITCH_ACTIVE' };
+    return deny('GLOBAL_KILL_SWITCH_ACTIVE', 'Trading is currently paused by operator kill switch.');
   }
 
   const routeCheck = validatePairByPolicy(user.constraints, pair);
   if (!routeCheck.allowed) {
-    return { allowed: false, reasonCode: routeCheck.reasonCode };
+    return deny(routeCheck.reasonCode, 'Pair policy denied this trade request.');
+  }
+
+  if (!user.wallet.mode) {
+    return deny('WALLET_MODE_REQUIRED', 'Wallet mode must be configured before trading.');
+  }
+
+  if (user.wallet.mode === 'external') {
+    const permission = user.wallet.delegatedPermission;
+    if (!permission) {
+      return deny('DELEGATION_REQUIRED', 'External wallet trading requires delegated permission.');
+    }
+    if (permission.revokedAt) {
+      return deny('DELEGATION_REVOKED', 'Delegated permission has been revoked.');
+    }
+    if (permission.expiresAt && new Date(permission.expiresAt) <= now) {
+      return deny('DELEGATION_EXPIRED', 'Delegated permission has expired.');
+    }
+    if (Array.isArray(permission.allowedActions) && !permission.allowedActions.includes(action)) {
+      return deny('DELEGATION_ACTION_NOT_ALLOWED', 'Requested action is outside delegated scope.');
+    }
+    if (permission.maxTradeSizeUsd != null && tradeSizeUsd > permission.maxTradeSizeUsd) {
+      return deny('DELEGATION_MAX_TRADE_EXCEEDED', 'Requested trade size exceeds delegation limit.');
+    }
   }
 
   const trial = isWithinTrial(user, now);
   if (!trial && !user.stakeActive) {
-    return { allowed: false, reasonCode: 'TRIAL_ENDED_STAKE_REQUIRED' };
+    return deny('TRIAL_ENDED_STAKE_REQUIRED', 'Trial window ended and stake is required.');
   }
 
   const projectedGrossProfit = user.monthlyGrossProfitUsd + expectedGrossProfitUsd;
   if (projectedGrossProfit > MONTHLY_GROSS_PROFIT_CAP_USD && !hasValidWeeklyPass(user, now)) {
-    return {
-      allowed: false,
-      reasonCode: 'MONTHLY_GROSS_PROFIT_CAP_WEEKLY_PASS_REQUIRED',
-      weeklyPassCostUsdc: WEEKLY_PASS_USDC
-    };
+    return deny(
+      'MONTHLY_GROSS_PROFIT_CAP_WEEKLY_PASS_REQUIRED',
+      'Monthly gross-profit cap reached; weekly pass is required.',
+      {
+        weeklyPassCostUsdc: WEEKLY_PASS_USDC
+      }
+    );
+  }
+
+  if (!FEE_ROUTING_ENABLED) {
+    return deny('FEE_ROUTING_DISABLED', 'Trading temporarily unavailable while fee routing is disabled.');
   }
 
   return {
     allowed: true,
     reasonCode: 'AUTHORIZED',
+    reason: 'Trade request is authorized under current policy.',
     feeRouting: {
-      feeBps: 50,
+      enabled: FEE_ROUTING_ENABLED,
+      feeBps: FEE_ROUTING_BPS,
       destinationWallet: JUPITER_FEE_WALLET
     }
   };
