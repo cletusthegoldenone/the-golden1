@@ -1,13 +1,14 @@
 const { POLICY_VERSIONS } = require('./config');
 const { state, getUser } = require('./store');
 
-function recordConsent({ identity, accepted, ip, userAgent }) {
-  const timestampUtc = new Date().toISOString();
+function recordConsent({ identity, accepted, ip, userAgent, sessionId }) {
+  const acceptedAtUtc = new Date().toISOString();
   const log = {
-    identity,
+    userId: identity,
+    sessionId: sessionId || null,
     acceptanceStatus: accepted ? 'accepted' : 'declined',
     policyVersions: { ...POLICY_VERSIONS },
-    timestampUtc,
+    acceptedAtUtc,
     metadata: {
       ip: ip || null,
       userAgent: userAgent || null
@@ -22,7 +23,7 @@ function recordConsent({ identity, accepted, ip, userAgent }) {
 
 function hasAcceptedLatest(identity) {
   const userLogs = state.consentLogs
-    .filter((log) => log.identity === identity && log.acceptanceStatus === 'accepted')
+    .filter((log) => log.userId === identity && log.acceptanceStatus === 'accepted')
     .reverse();
 
   if (!userLogs.length) return false;
@@ -33,7 +34,14 @@ function hasAcceptedLatest(identity) {
   );
 }
 
+function getConsentHistory(identity) {
+  return state.consentLogs
+    .filter((log) => log.userId === identity)
+    .sort((a, b) => new Date(b.acceptedAtUtc) - new Date(a.acceptedAtUtc));
+}
+
 module.exports = {
   recordConsent,
-  hasAcceptedLatest
+  hasAcceptedLatest,
+  getConsentHistory
 };

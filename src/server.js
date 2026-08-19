@@ -1,6 +1,6 @@
 const http = require('http');
 const { URL } = require('url');
-const { recordConsent, hasAcceptedLatest } = require('./legal');
+const { recordConsent, hasAcceptedLatest, getConsentHistory } = require('./legal');
 const { getUser, state } = require('./store');
 const { evaluateTradeAuthorization } = require('./tradingAuth');
 const { toCsv, summarize, TAX_DISCLAIMER } = require('./taxCenter');
@@ -34,6 +34,24 @@ function isProtectedPath(pathname) {
   return pathname.startsWith('/app') || pathname.startsWith('/api/protected') || pathname === '/api/trade/check';
 }
 
+const ONBOARDING_STEPS = [
+  ['legalAccepted', 'legal'],
+  ['accountCreated', 'register'],
+  ['profileInitialized', 'profile'],
+  ['walletModeSelected', 'wallet-mode'],
+  ['constraintsConfigured', 'constraints'],
+  ['walletFundedOrLinked', 'fund-or-link']
+];
+
+function onboardingStatus(onboarding) {
+  const next = ONBOARDING_STEPS.find(([key]) => !onboarding[key]);
+  return {
+    ...onboarding,
+    nextStep: next ? next[1] : null,
+    resumable: !!next
+  };
+}
+
 function legalGateHtml() {
   return `<!doctype html><html><head><title>The Golden1 Legal Gate</title><style>body{margin:0;font-family:sans-serif;background:#fff;color:#111}main{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}section{max-width:720px}h1{font-size:2rem}</style></head><body><main><section><h1>Legal Acceptance Required</h1><p>You must accept Terms, Risk Disclaimer, Trading Authorization Disclosures, and Privacy Acknowledgement before app access.</p></section></main></body></html>`;
 }
@@ -63,6 +81,7 @@ function createApp() {
       const log = recordConsent({
         identity: body.identity,
         accepted: body.accepted,
+        sessionId: req.headers['x-session-id'],
         ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
         userAgent: req.headers['user-agent']
       });
@@ -72,9 +91,12 @@ function createApp() {
     if (req.method === 'POST' && reqUrl.pathname === '/api/register') {
       const body = await readBody(req).catch(() => null);
       if (!body || !body.identity) return json(res, 400, { error: 'identity required' });
+      if (!hasAcceptedLatest(body.identity)) {
+        return json(res, 403, { blocked: true, reasonCode: 'LEGAL_ACCEPTANCE_REQUIRED', legalPath: '/legal' });
+      }
       const user = getUser(body.identity);
       user.onboarding.accountCreated = true;
-      return json(res, 200, { ok: true, onboarding: user.onboarding });
+      return json(res, 200, { ok: true, onboarding: onboardingStatus(user.onboarding) });
     }
 
     if (req.method === 'POST' && reqUrl.pathname === '/api/protected/onboarding/profile') {
@@ -86,7 +108,7 @@ function createApp() {
         preferences: body.preferences || {}
       };
       user.onboarding.profileInitialized = true;
-      return json(res, 200, { ok: true, profile: user.profile });
+      return json(res, 200, { ok: true, profile: user.profile, onboarding: onboardingStatus(user.onboarding) });
     }
 
     if (req.method === 'POST' && reqUrl.pathname === '/api/protected/onboarding/wallet-mode') {
@@ -110,7 +132,7 @@ function createApp() {
         };
       }
       user.onboarding.walletModeSelected = true;
-      return json(res, 200, { ok: true, wallet: user.wallet });
+      return json(res, 200, { ok: true, wallet: user.wallet, onboarding: onboardingStatus(user.onboarding) });
     }
 
     if (req.method === 'POST' && reqUrl.pathname === '/api/protected/onboarding/constraints') {
@@ -121,14 +143,19 @@ function createApp() {
         ...body
       };
       user.onboarding.constraintsConfigured = true;
-      return json(res, 200, { ok: true, constraints: user.constraints });
+      return json(res, 200, { ok: true, constraints: user.constraints, onboarding: onboardingStatus(user.onboarding) });
     }
 
     if (req.method === 'POST' && reqUrl.pathname === '/api/protected/onboarding/fund-or-link') {
       const user = getUser(identity);
       user.onboarding.walletFundedOrLinked = true;
       user.onboarding.completed = true;
-      return json(res, 200, { ok: true, onboarding: user.onboarding });
+      return json(res, 200, { ok: true, onboarding: onboardingStatus(user.onboarding) });
+    }
+
+    if (req.method === 'GET' && reqUrl.pathname === '/api/protected/onboarding/status') {
+      const user = getUser(identity);
+      return json(res, 200, { onboarding: onboardingStatus(user.onboarding) });
     }
 
     if (req.method === 'POST' && reqUrl.pathname === '/api/protected/wallet/revoke-delegation') {
@@ -139,11 +166,17 @@ function createApp() {
       return json(res, 200, { ok: true, wallet: user.wallet });
     }
 
+    if (req.method === 'GET' && reqUrl.pathname === '/api/protected/legal/consents') {
+      return json(res, 200, { consents: getConsentHistory(identity) });
+    }
+
     if (req.method === 'POST' && reqUrl.pathname === '/api/trade/check') {
       const body = await readBody(req).catch(() => null);
       const user = getUser(identity);
       const auth = evaluateTradeAuthorization(user, {
         pair: body?.pair,
+        action: body?.action || 'swap',
+        tradeSizeUsd: Number(body?.tradeSizeUsd || 0),
         expectedGrossProfitUsd: Number(body?.expectedGrossProfitUsd || 0)
       });
       return json(res, auth.allowed ? 200 : 403, auth);
@@ -166,6 +199,9 @@ function createApp() {
         });
         res.end(toCsv(txs));
         return;
+      }
+      if (format !== 'json') {
+        return json(res, 400, { error: 'format must be json|csv' });
       }
       return json(res, 200, { disclaimer: TAX_DISCLAIMER, transactions: txs });
     }
