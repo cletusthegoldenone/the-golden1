@@ -1,16 +1,51 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createApp } = require('../src/server');
-const { state, getUser } = require('../src/store');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
-function resetState() {
-  state.users.clear();
-  state.consentLogs.length = 0;
-  state.transactions.clear();
-  state.operatorFlags.killSwitch = false;
+const ROOT = path.resolve(__dirname, '..');
+const MODULES_TO_CLEAR = [
+  'src/server.js',
+  'src/config.js',
+  'src/store.js',
+  'src/legal.js',
+  'src/auth.js',
+  'src/tradingAuth.js',
+  'src/rateLimit.js'
+].map((relativePath) => path.join(ROOT, relativePath));
+
+function clearAppModules() {
+  for (const modulePath of MODULES_TO_CLEAR) {
+    delete require.cache[modulePath];
+  }
 }
 
-async function startServer() {
+function setupEnv(overrides = {}) {
+  process.env.SESSION_SECRET = overrides.SESSION_SECRET || 'test-session-secret';
+  process.env.AUTH_BOOTSTRAP_TOKEN = overrides.AUTH_BOOTSTRAP_TOKEN || 'test-bootstrap-token';
+  process.env.SESSION_TTL_SECONDS = overrides.SESSION_TTL_SECONDS || '3600';
+  process.env.SESSION_COOKIE_NAME = overrides.SESSION_COOKIE_NAME || 'tg1_session';
+  process.env.PERSISTENCE_FILE_PATH = overrides.PERSISTENCE_FILE_PATH;
+  process.env.RATE_LIMIT_PUBLIC_MAX = overrides.RATE_LIMIT_PUBLIC_MAX || '1000';
+  process.env.RATE_LIMIT_PUBLIC_WINDOW_MS = overrides.RATE_LIMIT_PUBLIC_WINDOW_MS || '60000';
+  process.env.RATE_LIMIT_PROTECTED_MAX = overrides.RATE_LIMIT_PROTECTED_MAX || '1000';
+  process.env.RATE_LIMIT_PROTECTED_WINDOW_MS = overrides.RATE_LIMIT_PROTECTED_WINDOW_MS || '60000';
+}
+
+function loadApp(overrides = {}) {
+  setupEnv(overrides);
+  clearAppModules();
+  const { createApp } = require('../src/server');
+  const { getUser, resetState } = require('../src/store');
+  return { createApp, getUser, resetState };
+}
+
+function dataFilePath(name) {
+  return path.join(os.tmpdir(), 'the-golden1-tests', `${name}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+}
+
+async function startServer(createApp) {
   const app = createApp();
   await new Promise((resolve) => app.listen(0, resolve));
   const { port } = app.address();
@@ -20,292 +55,261 @@ async function startServer() {
   };
 }
 
-test('protected routes are blocked before legal acceptance', async () => {
-  resetState();
-  const { app, baseUrl } = await startServer();
-
-  const res = await fetch(`${baseUrl}/api/trade/check?identity=u1`, {
+async function postJson(url, body, headers = {}) {
+  return fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'SOL/USDC' })
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body)
   });
+}
 
-  assert.equal(res.status, 403);
-  const payload = await res.json();
-  assert.equal(payload.reasonCode, 'LEGAL_ACCEPTANCE_REQUIRED');
+async function bootstrapUser(baseUrl, identity) {
+  const acceptRes = await postJson(`${baseUrl}/api/legal/accept`, { identity, accepted: true }, { 'x-session-id': `sess-${identity}` });
+  assert.equal(acceptRes.status, 200);
 
-  app.close();
+  const registerRes = await postJson(`${baseUrl}/api/register`, { identity });
+  assert.equal(registerRes.status, 200);
+}
+
+async function login(baseUrl, identity, token = 'test-bootstrap-token') {
+  const res = await postJson(`${baseUrl}/api/session/login`, { identity }, { 'x-bootstrap-token': token });
+  return {
+    res,
+    cookie: res.headers.get('set-cookie')
+  };
+}
+
+test('protected routes require validated auth session and reject spoofed identity context', async () => {
+  const persistencePath = dataFilePath('auth-enforcement');
+  const { createApp, resetState } = loadApp({ PERSISTENCE_FILE_PATH: persistencePath });
+  resetState();
+  const { app, baseUrl } = await startServer(createApp);
+
+  try {
+    await bootstrapUser(baseUrl, 'u1');
+
+    const missingAuth = await postJson(`${baseUrl}/api/trade/check`, { pair: 'SOL/USDC' });
+    assert.equal(missingAuth.status, 401);
+    assert.equal((await missingAuth.json()).reasonCode, 'AUTH_REQUIRED');
+
+    const invalidAuth = await postJson(
+      `${baseUrl}/api/trade/check`,
+      { pair: 'SOL/USDC' },
+      { authorization: '******' }
+    );
+    assert.equal(invalidAuth.status, 401);
+    assert.equal((await invalidAuth.json()).reasonCode, 'AUTH_REQUIRED');
+
+    const malformedBearer = await postJson(
+      `${baseUrl}/api/trade/check`,
+      { pair: 'SOL/USDC' },
+      { cookie: 'tg1_session=bad.token' }
+    );
+    assert.equal(malformedBearer.status, 401);
+    assert.equal((await malformedBearer.json()).reasonCode, 'AUTH_INVALID');
+
+    const deniedLogin = await login(baseUrl, 'u1', 'wrong-token');
+    assert.equal(deniedLogin.res.status, 401);
+    assert.equal((await deniedLogin.res.json()).reasonCode, 'AUTH_BOOTSTRAP_INVALID');
+
+    const authLogin = await login(baseUrl, 'u1');
+    assert.equal(authLogin.res.status, 200);
+    assert.ok(authLogin.cookie);
+
+    const statusRes = await fetch(`${baseUrl}/api/protected/onboarding/status`, {
+      headers: { cookie: authLogin.cookie }
+    });
+    assert.equal(statusRes.status, 200);
+
+    const mismatchRes = await fetch(`${baseUrl}/api/protected/onboarding/status?identity=evil`, {
+      headers: { cookie: authLogin.cookie }
+    });
+    assert.equal(mismatchRes.status, 403);
+    assert.equal((await mismatchRes.json()).reasonCode, 'AUTH_IDENTITY_MISMATCH');
+  } finally {
+    app.close();
+    fs.rmSync(persistencePath, { force: true });
+  }
 });
 
-test('legal acceptance enables onboarding and trading authorization checks', async () => {
-  resetState();
-  const { app, baseUrl } = await startServer();
+test('file-backed persistence survives restart for consent, onboarding, wallet state, and operator flags', async () => {
+  const persistencePath = dataFilePath('durability');
+  const first = loadApp({ PERSISTENCE_FILE_PATH: persistencePath });
+  first.resetState();
+  const server1 = await startServer(first.createApp);
 
-  await fetch(`${baseUrl}/api/legal/accept`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identity: 'u2', accepted: true })
-  });
+  try {
+    await bootstrapUser(server1.baseUrl, 'u2');
+    const authLogin = await login(server1.baseUrl, 'u2');
+    assert.equal(authLogin.res.status, 200);
 
-  await fetch(`${baseUrl}/api/register`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identity: 'u2' })
-  });
+    const walletRes = await postJson(
+      `${server1.baseUrl}/api/protected/onboarding/wallet-mode`,
+      {
+        mode: 'external',
+        allowedActions: ['swap'],
+        maxTradeSizeUsd: 1000
+      },
+      { cookie: authLogin.cookie }
+    );
+    assert.equal(walletRes.status, 200);
 
-  const walletRes = await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u2`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ mode: 'external', allowedActions: ['swap'], maxTradeSizeUsd: 1000 })
-  });
+    const killSwitchRes = await postJson(
+      `${server1.baseUrl}/api/protected/operator/kill-switch`,
+      { enabled: true },
+      { cookie: authLogin.cookie }
+    );
+    assert.equal(killSwitchRes.status, 200);
+  } finally {
+    server1.app.close();
+  }
 
-  assert.equal(walletRes.status, 200);
-  const walletPayload = await walletRes.json();
-  assert.equal(walletPayload.onboarding.nextStep, 'profile');
+  const second = loadApp({ PERSISTENCE_FILE_PATH: persistencePath });
+  const server2 = await startServer(second.createApp);
 
-  const tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u2`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'SOL/USDC', expectedGrossProfitUsd: 25 })
-  });
+  try {
+    const authLogin = await login(server2.baseUrl, 'u2');
+    assert.equal(authLogin.res.status, 200);
 
-  assert.equal(tradeRes.status, 200);
-  const tradePayload = await tradeRes.json();
-  assert.equal(tradePayload.reasonCode, 'AUTHORIZED');
-  assert.equal(tradePayload.reason, 'Trade request is authorized under current policy.');
-  assert.equal(tradePayload.feeRouting.destinationWallet, 'h1vRxwsCLUtiD6UiKpSgNnTDUAqvXCxurFVUfvH1noj');
+    const consentRes = await fetch(`${server2.baseUrl}/api/protected/legal/consents`, {
+      headers: { cookie: authLogin.cookie }
+    });
+    const consentPayload = await consentRes.json();
+    assert.equal(consentPayload.consents.length, 1);
 
-  app.close();
+    const walletStatusRes = await fetch(`${server2.baseUrl}/api/protected/wallet/status`, {
+      headers: { cookie: authLogin.cookie }
+    });
+    const walletStatus = await walletStatusRes.json();
+    assert.equal(walletStatus.mode, 'external');
+    assert.equal(walletStatus.delegation.maxTradeSizeUsd, 1000);
+
+    const tradeRes = await postJson(
+      `${server2.baseUrl}/api/trade/check`,
+      { pair: 'SOL/USDC', tradeSizeUsd: 1 },
+      { cookie: authLogin.cookie }
+    );
+    const tradePayload = await tradeRes.json();
+    assert.equal(tradePayload.reasonCode, 'GLOBAL_KILL_SWITCH_ACTIVE');
+  } finally {
+    server2.app.close();
+    fs.rmSync(persistencePath, { force: true });
+  }
 });
 
-test('policy controls and business rules return auditable block reason codes', async () => {
-  resetState();
-  const { app, baseUrl } = await startServer();
-
-  await fetch(`${baseUrl}/api/legal/accept`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identity: 'u3', accepted: true })
+test('rate limiting returns deterministic 429 payloads for public and protected routes', async () => {
+  const publicPersistencePath = dataFilePath('rate-limit-public');
+  const publicAppModules = loadApp({
+    PERSISTENCE_FILE_PATH: publicPersistencePath,
+    RATE_LIMIT_PUBLIC_MAX: '2',
+    RATE_LIMIT_PROTECTED_MAX: '1000',
+    RATE_LIMIT_PUBLIC_WINDOW_MS: '60000',
+    RATE_LIMIT_PROTECTED_WINDOW_MS: '60000'
   });
+  publicAppModules.resetState();
+  const publicServer = await startServer(publicAppModules.createApp);
 
-  const user = getUser('u3');
-  user.trialStartedAt = '2025-01-01T00:00:00.000Z';
-  user.stakeActive = false;
-  user.wallet.mode = 'external';
-  user.wallet.delegatedPermission = { allowedActions: ['swap'], maxTradeSizeUsd: 1000, expiresAt: null, revokedAt: null };
-  user.constraints.whitelistMode = true;
-  user.constraints.allowedPairs = ['BONK/USDC'];
+  try {
+    const legal1 = await fetch(`${publicServer.baseUrl}/legal`);
+    assert.equal(legal1.status, 200);
+    const legal2 = await fetch(`${publicServer.baseUrl}/legal`);
+    assert.equal(legal2.status, 200);
+    const legal3 = await fetch(`${publicServer.baseUrl}/legal`);
+    assert.equal(legal3.status, 429);
+    const payload = await legal3.json();
+    assert.equal(payload.reasonCode, 'RATE_LIMIT_EXCEEDED');
+    assert.equal(payload.scope, 'public');
+  } finally {
+    publicServer.app.close();
+    fs.rmSync(publicPersistencePath, { force: true });
+  }
 
-  const whitelistBlocked = await fetch(`${baseUrl}/api/trade/check?identity=u3`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'SOL/USDC' })
+  const protectedPersistencePath = dataFilePath('rate-limit-protected');
+  const protectedAppModules = loadApp({
+    PERSISTENCE_FILE_PATH: protectedPersistencePath,
+    RATE_LIMIT_PUBLIC_MAX: '1000',
+    RATE_LIMIT_PROTECTED_MAX: '1',
+    RATE_LIMIT_PUBLIC_WINDOW_MS: '60000',
+    RATE_LIMIT_PROTECTED_WINDOW_MS: '60000'
   });
-  assert.equal((await whitelistBlocked.json()).reasonCode, 'PAIR_NOT_WHITELISTED');
+  protectedAppModules.resetState();
+  const protectedServer = await startServer(protectedAppModules.createApp);
 
-  const trialBlocked = await fetch(`${baseUrl}/api/trade/check?identity=u3`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'BONK/USDC' })
-  });
-  assert.equal((await trialBlocked.json()).reasonCode, 'TRIAL_ENDED_STAKE_REQUIRED');
+  try {
+    await bootstrapUser(protectedServer.baseUrl, 'u3');
+    const authLogin = await login(protectedServer.baseUrl, 'u3');
+    assert.equal(authLogin.res.status, 200);
 
-  user.stakeActive = true;
-  user.monthlyGrossProfitUsd = 10000;
+    const firstProtected = await fetch(`${protectedServer.baseUrl}/api/protected/onboarding/status`, {
+      headers: { cookie: authLogin.cookie }
+    });
+    assert.equal(firstProtected.status, 200);
 
-  const capBlocked = await fetch(`${baseUrl}/api/trade/check?identity=u3`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'BONK/USDC', expectedGrossProfitUsd: 1 })
-  });
-  assert.equal((await capBlocked.json()).reasonCode, 'MONTHLY_GROSS_PROFIT_CAP_WEEKLY_PASS_REQUIRED');
-
-  const killSwitchRes = await fetch(`${baseUrl}/api/protected/operator/kill-switch?identity=u3`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ enabled: true })
-  });
-  assert.equal(killSwitchRes.status, 200);
-
-  const killBlocked = await fetch(`${baseUrl}/api/trade/check?identity=u3`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'BONK/USDC' })
-  });
-  assert.equal((await killBlocked.json()).reasonCode, 'GLOBAL_KILL_SWITCH_ACTIVE');
-
-  app.close();
+    const protectedRes = await fetch(`${protectedServer.baseUrl}/api/protected/onboarding/status`, {
+      headers: { cookie: authLogin.cookie }
+    });
+    assert.equal(protectedRes.status, 429);
+    const protectedPayload = await protectedRes.json();
+    assert.equal(protectedPayload.reasonCode, 'RATE_LIMIT_EXCEEDED');
+    assert.equal(protectedPayload.scope, 'protected');
+  } finally {
+    protectedServer.app.close();
+    fs.rmSync(protectedPersistencePath, { force: true });
+  }
 });
 
-test('consent history and onboarding status endpoints are available on protected surfaces', async () => {
+test('policy and delegation reason codes remain unchanged with stronger auth/session controls', async () => {
+  const persistencePath = dataFilePath('policy-behavior');
+  const { createApp, getUser, resetState } = loadApp({ PERSISTENCE_FILE_PATH: persistencePath });
   resetState();
-  const { app, baseUrl } = await startServer();
+  const { app, baseUrl } = await startServer(createApp);
 
-  await fetch(`${baseUrl}/api/legal/accept`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-session-id': 'sess-1' },
-    body: JSON.stringify({ identity: 'u4', accepted: true })
-  });
+  try {
+    await bootstrapUser(baseUrl, 'u4');
+    const authLogin = await login(baseUrl, 'u4');
+    assert.equal(authLogin.res.status, 200);
 
-  await fetch(`${baseUrl}/api/register`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identity: 'u4' })
-  });
+    const walletRes = await postJson(
+      `${baseUrl}/api/protected/onboarding/wallet-mode`,
+      {
+        mode: 'external',
+        allowedActions: ['swap'],
+        maxTradeSizeUsd: 100,
+        expiresAt: '2000-01-01T00:00:00.000Z'
+      },
+      { cookie: authLogin.cookie }
+    );
+    assert.equal(walletRes.status, 200);
 
-  const consentRes = await fetch(`${baseUrl}/api/protected/legal/consents?identity=u4`);
-  assert.equal(consentRes.status, 200);
-  const consentPayload = await consentRes.json();
-  assert.equal(consentPayload.consents.length, 1);
-  assert.equal(consentPayload.consents[0].userId, 'u4');
-  assert.equal(consentPayload.consents[0].sessionId, 'sess-1');
+    let tradeRes = await postJson(
+      `${baseUrl}/api/trade/check`,
+      { pair: 'SOL/USDC', action: 'swap', tradeSizeUsd: 10 },
+      { cookie: authLogin.cookie }
+    );
+    assert.equal((await tradeRes.json()).reasonCode, 'DELEGATION_EXPIRED');
 
-  const statusRes = await fetch(`${baseUrl}/api/protected/onboarding/status?identity=u4`);
-  assert.equal(statusRes.status, 200);
-  const statusPayload = await statusRes.json();
-  assert.equal(statusPayload.onboarding.accountCreated, true);
-  assert.equal(statusPayload.onboarding.nextStep, 'profile');
+    const user = getUser('u4');
+    user.wallet.delegatedPermission.expiresAt = null;
+    user.trialStartedAt = '2025-01-01T00:00:00.000Z';
+    user.stakeActive = false;
+    user.constraints.whitelistMode = true;
+    user.constraints.allowedPairs = ['BONK/USDC'];
 
-  app.close();
-});
+    tradeRes = await postJson(
+      `${baseUrl}/api/trade/check`,
+      { pair: 'SOL/USDC', action: 'swap', tradeSizeUsd: 10 },
+      { cookie: authLogin.cookie }
+    );
+    assert.equal((await tradeRes.json()).reasonCode, 'PAIR_NOT_WHITELISTED');
 
-test('external delegation scope, expiry, and revocation are enforced', async () => {
-  resetState();
-  const { app, baseUrl } = await startServer();
-
-  await fetch(`${baseUrl}/api/legal/accept`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identity: 'u5', accepted: true })
-  });
-
-  await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u5`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      mode: 'external',
-      allowedActions: ['swap'],
-      maxTradeSizeUsd: 100,
-      expiresAt: '2000-01-01T00:00:00.000Z'
-    })
-  });
-
-  let tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u5`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'SOL/USDC', action: 'swap', tradeSizeUsd: 10 })
-  });
-  assert.equal((await tradeRes.json()).reasonCode, 'DELEGATION_EXPIRED');
-
-  const user = getUser('u5');
-  user.wallet.delegatedPermission.expiresAt = null;
-
-  tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u5`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'SOL/USDC', action: 'stake', tradeSizeUsd: 10 })
-  });
-  assert.equal((await tradeRes.json()).reasonCode, 'DELEGATION_ACTION_NOT_ALLOWED');
-
-  tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u5`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'SOL/USDC', action: 'swap', tradeSizeUsd: 101 })
-  });
-  assert.equal((await tradeRes.json()).reasonCode, 'DELEGATION_MAX_TRADE_EXCEEDED');
-
-  await fetch(`${baseUrl}/api/protected/wallet/revoke-delegation?identity=u5`, { method: 'POST' });
-  tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u5`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'SOL/USDC', action: 'swap', tradeSizeUsd: 10 })
-  });
-  assert.equal((await tradeRes.json()).reasonCode, 'DELEGATION_REVOKED');
-
-  app.close();
-});
-
-test('trade check validates numeric inputs and wallet mode validates external delegation shape', async () => {
-  resetState();
-  const { app, baseUrl } = await startServer();
-
-  await fetch(`${baseUrl}/api/legal/accept`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identity: 'u6', accepted: true })
-  });
-
-  let walletRes = await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u6`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      mode: 'external',
-      allowedActions: ['swap', '', 123],
-      expiresAt: 'not-a-date'
-    })
-  });
-  assert.equal(walletRes.status, 400);
-
-  walletRes = await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u6`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      mode: 'external',
-      allowedActions: ['swap', '', 123],
-      maxTradeSizeUsd: '15',
-      expiresAt: '2030-01-01T00:00:00.000Z'
-    })
-  });
-  assert.equal(walletRes.status, 200);
-
-  const user = getUser('u6');
-  assert.deepEqual(user.wallet.delegatedPermission.allowedActions, ['swap']);
-  assert.equal(user.wallet.delegatedPermission.maxTradeSizeUsd, 15);
-  assert.equal(user.wallet.delegatedPermission.expiresAt, '2030-01-01T00:00:00.000Z');
-
-  walletRes = await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u6`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      mode: 'external',
-      allowedActions: ['', 123]
-    })
-  });
-  assert.equal(walletRes.status, 200);
-  assert.deepEqual(getUser('u6').wallet.delegatedPermission.allowedActions, ['swap']);
-  assert.equal(getUser('u6').wallet.delegatedPermission.maxTradeSizeUsd, null);
-
-  walletRes = await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u6`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      mode: 'external',
-      maxTradeSizeUsd: 0
-    })
-  });
-  assert.equal(walletRes.status, 200);
-  assert.equal(getUser('u6').wallet.delegatedPermission.maxTradeSizeUsd, 0);
-
-  const zeroLimitTradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u6`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'SOL/USDC', tradeSizeUsd: 0.01 })
-  });
-  assert.equal((await zeroLimitTradeRes.json()).reasonCode, 'DELEGATION_MAX_TRADE_EXCEEDED');
-
-  const tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u6`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'SOL/USDC', tradeSizeUsd: 'nope' })
-  });
-  assert.equal(tradeRes.status, 400);
-
-  const negativeProfitRes = await fetch(`${baseUrl}/api/trade/check?identity=u6`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ pair: 'SOL/USDC', expectedGrossProfitUsd: -1 })
-  });
-  assert.equal(negativeProfitRes.status, 400);
-
-  app.close();
+    tradeRes = await postJson(
+      `${baseUrl}/api/trade/check`,
+      { pair: 'BONK/USDC', action: 'swap', tradeSizeUsd: 10 },
+      { cookie: authLogin.cookie }
+    );
+    assert.equal((await tradeRes.json()).reasonCode, 'TRIAL_ENDED_STAKE_REQUIRED');
+  } finally {
+    app.close();
+    fs.rmSync(persistencePath, { force: true });
+  }
 });
