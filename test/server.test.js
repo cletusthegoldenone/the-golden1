@@ -263,6 +263,17 @@ test('trade check validates numeric inputs and wallet mode validates external de
   assert.equal(user.wallet.delegatedPermission.maxTradeSizeUsd, 15);
   assert.equal(user.wallet.delegatedPermission.expiresAt, '2030-01-01T00:00:00.000Z');
 
+  walletRes = await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u6`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      mode: 'external',
+      allowedActions: ['', 123]
+    })
+  });
+  assert.equal(walletRes.status, 200);
+  assert.deepEqual(getUser('u6').wallet.delegatedPermission.allowedActions, ['swap']);
+
   const tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u6`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

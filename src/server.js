@@ -187,8 +187,8 @@ function createApp() {
 
     if (req.method === 'POST' && reqUrl.pathname === '/api/trade/check') {
       const body = await readBody(req).catch(() => null);
-      const expectedGrossProfitUsd = Number(body?.expectedGrossProfitUsd || 0);
-      const tradeSizeUsd = Number(body?.tradeSizeUsd || 0);
+      const expectedGrossProfitUsd = Number(body?.expectedGrossProfitUsd ?? 0);
+      const tradeSizeUsd = Number(body?.tradeSizeUsd ?? 0);
       if (!Number.isFinite(expectedGrossProfitUsd) || expectedGrossProfitUsd < 0 || !Number.isFinite(tradeSizeUsd) || tradeSizeUsd < 0) {
         return json(res, 400, { error: 'expectedGrossProfitUsd and tradeSizeUsd must be valid numbers' });
       }
