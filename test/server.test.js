@@ -224,3 +224,58 @@ test('external delegation scope, expiry, and revocation are enforced', async () 
 
   app.close();
 });
+
+test('trade check validates numeric inputs and wallet mode validates external delegation shape', async () => {
+  resetState();
+  const { app, baseUrl } = await startServer();
+
+  await fetch(`${baseUrl}/api/legal/accept`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ identity: 'u6', accepted: true })
+  });
+
+  let walletRes = await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u6`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      mode: 'external',
+      allowedActions: ['swap', '', 123],
+      expiresAt: 'not-a-date'
+    })
+  });
+  assert.equal(walletRes.status, 400);
+
+  walletRes = await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u6`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      mode: 'external',
+      allowedActions: ['swap', '', 123],
+      maxTradeSizeUsd: '15',
+      expiresAt: '2030-01-01T00:00:00.000Z'
+    })
+  });
+  assert.equal(walletRes.status, 200);
+
+  const user = getUser('u6');
+  assert.deepEqual(user.wallet.delegatedPermission.allowedActions, ['swap']);
+  assert.equal(user.wallet.delegatedPermission.maxTradeSizeUsd, 15);
+  assert.equal(user.wallet.delegatedPermission.expiresAt, '2030-01-01T00:00:00.000Z');
+
+  const tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u6`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ pair: 'SOL/USDC', tradeSizeUsd: 'nope' })
+  });
+  assert.equal(tradeRes.status, 400);
+
+  const negativeProfitRes = await fetch(`${baseUrl}/api/trade/check?identity=u6`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ pair: 'SOL/USDC', expectedGrossProfitUsd: -1 })
+  });
+  assert.equal(negativeProfitRes.status, 400);
+
+  app.close();
+});

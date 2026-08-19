@@ -52,6 +52,13 @@ function onboardingStatus(onboarding) {
   };
 }
 
+function parseOptionalPositiveNumber(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
 function legalGateHtml() {
   return `<!doctype html><html><head><title>The Golden1 Legal Gate</title><style>body{margin:0;font-family:sans-serif;background:#fff;color:#111}main{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}section{max-width:720px}h1{font-size:2rem}</style></head><body><main><section><h1>Legal Acceptance Required</h1><p>You must accept Terms, Risk Disclaimer, Trading Authorization Disclosures, and Privacy Acknowledgement before app access.</p></section></main></body></html>`;
 }
@@ -123,10 +130,18 @@ function createApp() {
         user.wallet.managedWalletId = `cw_${identity}`;
         user.wallet.delegatedPermission = null;
       } else {
+        const allowedActions = Array.isArray(body.allowedActions)
+          ? body.allowedActions.filter((value) => typeof value === 'string' && value.trim())
+          : ['swap'];
+        const maxTradeSizeUsd = parseOptionalPositiveNumber(body.maxTradeSizeUsd);
+        const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+        if (body.expiresAt && Number.isNaN(expiresAt.getTime())) {
+          return json(res, 400, { error: 'expiresAt must be a valid ISO timestamp' });
+        }
         user.wallet.delegatedPermission = {
-          allowedActions: body.allowedActions || ['swap'],
-          maxTradeSizeUsd: body.maxTradeSizeUsd || null,
-          expiresAt: body.expiresAt || null,
+          allowedActions: allowedActions.length ? allowedActions : ['swap'],
+          maxTradeSizeUsd,
+          expiresAt: expiresAt ? expiresAt.toISOString() : null,
           revocable: true,
           revokedAt: null
         };
@@ -172,12 +187,17 @@ function createApp() {
 
     if (req.method === 'POST' && reqUrl.pathname === '/api/trade/check') {
       const body = await readBody(req).catch(() => null);
+      const expectedGrossProfitUsd = Number(body?.expectedGrossProfitUsd || 0);
+      const tradeSizeUsd = Number(body?.tradeSizeUsd || 0);
+      if (!Number.isFinite(expectedGrossProfitUsd) || expectedGrossProfitUsd < 0 || !Number.isFinite(tradeSizeUsd) || tradeSizeUsd < 0) {
+        return json(res, 400, { error: 'expectedGrossProfitUsd and tradeSizeUsd must be valid numbers' });
+      }
       const user = getUser(identity);
       const auth = evaluateTradeAuthorization(user, {
         pair: body?.pair,
         action: body?.action || 'swap',
-        tradeSizeUsd: Number(body?.tradeSizeUsd || 0),
-        expectedGrossProfitUsd: Number(body?.expectedGrossProfitUsd || 0)
+        tradeSizeUsd,
+        expectedGrossProfitUsd
       });
       return json(res, auth.allowed ? 200 : 403, auth);
     }
