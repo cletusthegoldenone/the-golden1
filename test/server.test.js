@@ -273,6 +273,25 @@ test('trade check validates numeric inputs and wallet mode validates external de
   });
   assert.equal(walletRes.status, 200);
   assert.deepEqual(getUser('u6').wallet.delegatedPermission.allowedActions, ['swap']);
+  assert.equal(getUser('u6').wallet.delegatedPermission.maxTradeSizeUsd, null);
+
+  walletRes = await fetch(`${baseUrl}/api/protected/onboarding/wallet-mode?identity=u6`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      mode: 'external',
+      maxTradeSizeUsd: 0
+    })
+  });
+  assert.equal(walletRes.status, 200);
+  assert.equal(getUser('u6').wallet.delegatedPermission.maxTradeSizeUsd, 0);
+
+  const zeroLimitTradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u6`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ pair: 'SOL/USDC', tradeSizeUsd: 0.01 })
+  });
+  assert.equal((await zeroLimitTradeRes.json()).reasonCode, 'DELEGATION_MAX_TRADE_EXCEEDED');
 
   const tradeRes = await fetch(`${baseUrl}/api/trade/check?identity=u6`, {
     method: 'POST',

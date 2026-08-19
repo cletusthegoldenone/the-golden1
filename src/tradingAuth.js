@@ -63,7 +63,7 @@ function evaluateTradeAuthorization(
     if (Array.isArray(permission.allowedActions) && !permission.allowedActions.includes(action)) {
       return deny('DELEGATION_ACTION_NOT_ALLOWED', 'Requested action is outside delegated scope.');
     }
-    if (permission.maxTradeSizeUsd && tradeSizeUsd > permission.maxTradeSizeUsd) {
+    if (permission.maxTradeSizeUsd != null && tradeSizeUsd > permission.maxTradeSizeUsd) {
       return deny('DELEGATION_MAX_TRADE_EXCEEDED', 'Requested trade size exceeds delegation limit.');
     }
   }
