@@ -176,6 +176,36 @@ function createApp() {
       return json(res, 200, summarize(txs));
     }
 
+    if (req.method === 'GET' && reqUrl.pathname === '/api/protected/legal/consents') {
+      const logs = state.consentLogs.filter((l) => l.identity === identity);
+      return json(res, 200, { consents: logs });
+    }
+
+    if (req.method === 'GET' && reqUrl.pathname === '/api/protected/onboarding/status') {
+      const user = getUser(identity);
+      return json(res, 200, { onboarding: user.onboarding });
+    }
+
+    if (req.method === 'GET' && reqUrl.pathname === '/api/protected/wallet/status') {
+      const user = getUser(identity);
+      const delegation = user.wallet.delegatedPermission;
+      const delegationActive = delegation
+        ? !delegation.revokedAt &&
+          (!delegation.expiresAt || new Date(delegation.expiresAt) > new Date())
+        : false;
+      return json(res, 200, {
+        mode: user.wallet.mode,
+        managedWalletId: user.wallet.managedWalletId,
+        delegation: delegation
+          ? {
+              ...delegation,
+              active: delegationActive,
+              revokeStatus: delegation.revokedAt ? 'REVOKED' : 'ACTIVE'
+            }
+          : null
+      });
+    }
+
     return json(res, 404, { error: 'not_found' });
   });
 }
