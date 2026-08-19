@@ -1,5 +1,5 @@
 const { POLICY_VERSIONS } = require('./config');
-const { state, getUser } = require('./store');
+const { state, getUser, saveState } = require('./store');
 
 function recordConsent({ identity, accepted, ip, userAgent, sessionId }) {
   const acceptedAtUtc = new Date().toISOString();
@@ -18,6 +18,7 @@ function recordConsent({ identity, accepted, ip, userAgent, sessionId }) {
   state.consentLogs.push(log);
   const user = getUser(identity);
   user.onboarding.legalAccepted = !!accepted;
+  saveState();
   return log;
 }
 
