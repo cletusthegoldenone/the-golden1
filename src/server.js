@@ -233,8 +233,8 @@ function createApp() {
         return;
       }
 
-      if (req.method === 'GET' && reqUrl.pathname === '/healthz') {
-        return json(res, 200, { ok: true });
+      if (req.method === 'GET' && (reqUrl.pathname === '/healthz' || reqUrl.pathname === '/api/health')) {
+        return json(res, 200, { ok: true, service: 'the-golden1' });
       }
 
       if (req.method === 'GET' && reqUrl.pathname === '/readyz') {
