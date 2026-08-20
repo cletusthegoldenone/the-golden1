@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 
@@ -57,6 +58,11 @@ function setupEnv(overrides = {}) {
   process.env.RATE_LIMIT_PUBLIC_WINDOW_MS = overrides.RATE_LIMIT_PUBLIC_WINDOW_MS || '60000';
   process.env.RATE_LIMIT_PROTECTED_MAX = overrides.RATE_LIMIT_PROTECTED_MAX || '1000';
   process.env.RATE_LIMIT_PROTECTED_WINDOW_MS = overrides.RATE_LIMIT_PROTECTED_WINDOW_MS || '60000';
+  process.env.RATE_LIMIT_AUTH_MAX = overrides.RATE_LIMIT_AUTH_MAX || '10';
+  process.env.RATE_LIMIT_AUTH_WINDOW_MS = overrides.RATE_LIMIT_AUTH_WINDOW_MS || '900000';
+  process.env.MAX_TRADE_AMOUNT = overrides.MAX_TRADE_AMOUNT || '1000000000000';
+  process.env.MAX_TRADE_SIZE_USD = overrides.MAX_TRADE_SIZE_USD || '1000000';
+  process.env.CORS_ALLOWED_ORIGINS = overrides.CORS_ALLOWED_ORIGINS || '';
 }
 
 function loadApp(overrides = {}) {
@@ -86,6 +92,34 @@ async function postJson(url, body, headers = {}) {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body)
+  });
+}
+
+async function requestServer(server, { method = 'GET', path: requestPath = '/', headers = {}, body = null } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: server.app.address().port,
+        method,
+        path: requestPath,
+        headers
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString('utf8')
+          });
+        });
+      }
+    );
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
   });
 }
 
@@ -204,6 +238,20 @@ test('protected routes require validated auth session and reject spoofed identit
     app.close();
     fs.rmSync(persistencePath, { force: true });
   }
+});
+
+test('decodeSignature accepts canonical base64 and base58 and rejects malformed inputs', () => {
+  clearAppModules();
+  const { decodeSignature } = require('../src/solanaWallet');
+  const bytes = Buffer.from(Array.from({ length: 64 }, (_, index) => index));
+  const base64 = bytes.toString('base64');
+  const base58 = base58Encode(bytes);
+
+  assert.deepEqual(decodeSignature(base64), bytes);
+  assert.deepEqual(decodeSignature(base58), bytes);
+  assert.throws(() => decodeSignature(`${base64.slice(0, -1)}!`), /AUTH_SIGNATURE_INVALID/);
+  assert.throws(() => decodeSignature('Zm9v'), /AUTH_SIGNATURE_INVALID/);
+  assert.throws(() => decodeSignature(base64.replace(/=+$/, '')), /AUTH_SIGNATURE_INVALID/);
 });
 
 test('file-backed persistence survives restart for consent, onboarding, wallet state, and operator flags', async () => {
@@ -332,6 +380,49 @@ test('rate limiting returns deterministic 429 payloads for public and protected 
   }
 });
 
+test('auth rate limiting normalizes forwarded IP chains', async () => {
+  const persistencePath = dataFilePath('auth-rate-limit');
+  const { createApp, resetState } = loadApp({
+    PERSISTENCE_FILE_PATH: persistencePath,
+    AUTH_PROVIDER: 'wallet_challenge',
+    RATE_LIMIT_PUBLIC_MAX: '1000',
+    RATE_LIMIT_AUTH_MAX: '2',
+    RATE_LIMIT_AUTH_WINDOW_MS: '60000'
+  });
+  resetState();
+  const server = await startServer(createApp);
+  const wallet = createWalletSigner();
+
+  try {
+    const first = await postJson(
+      `${server.baseUrl}/api/auth/challenge`,
+      { walletPublicKey: wallet.publicKeyBase58 },
+      { 'x-forwarded-for': '203.0.113.4, 10.0.0.1' }
+    );
+    assert.equal(first.status, 200);
+
+    const second = await postJson(
+      `${server.baseUrl}/api/auth/challenge`,
+      { walletPublicKey: wallet.publicKeyBase58 },
+      { 'x-forwarded-for': '203.0.113.4, 10.0.0.2' }
+    );
+    assert.equal(second.status, 200);
+
+    const third = await postJson(
+      `${server.baseUrl}/api/auth/challenge`,
+      { walletPublicKey: wallet.publicKeyBase58 },
+      { 'x-forwarded-for': '203.0.113.4, 10.0.0.3' }
+    );
+    assert.equal(third.status, 429);
+    const payload = await third.json();
+    assert.equal(payload.reasonCode, 'RATE_LIMIT_EXCEEDED');
+    assert.equal(payload.scope, 'auth');
+  } finally {
+    server.app.close();
+    fs.rmSync(persistencePath, { force: true });
+  }
+});
+
 test('policy and delegation reason codes remain unchanged with stronger auth/session controls', async () => {
   const persistencePath = dataFilePath('policy-behavior');
   const { createApp, getUser, resetState } = loadApp({ PERSISTENCE_FILE_PATH: persistencePath });
@@ -382,6 +473,47 @@ test('policy and delegation reason codes remain unchanged with stronger auth/ses
       { cookie: authLogin.cookie }
     );
     assert.equal((await tradeRes.json()).reasonCode, 'TRIAL_ENDED_STAKE_REQUIRED');
+  } finally {
+    app.close();
+    fs.rmSync(persistencePath, { force: true });
+  }
+});
+
+test('trade input upper bounds reject oversized requests before execution', async () => {
+  const persistencePath = dataFilePath('trade-input-bounds');
+  const { createApp, resetState } = loadApp({
+    PERSISTENCE_FILE_PATH: persistencePath,
+    MAX_TRADE_AMOUNT: '100',
+    MAX_TRADE_SIZE_USD: '50'
+  });
+  resetState();
+  const { app, baseUrl } = await startServer(createApp);
+
+  try {
+    await bootstrapUser(baseUrl, 'u-bounds');
+    const authLogin = await login(baseUrl, 'u-bounds');
+    assert.equal(authLogin.res.status, 200);
+
+    const oversizedCheck = await postJson(
+      `${baseUrl}/api/trade/check`,
+      { pair: 'SOL/USDC', tradeSizeUsd: 51 },
+      { cookie: authLogin.cookie }
+    );
+    assert.equal(oversizedCheck.status, 400);
+    assert.equal((await oversizedCheck.json()).reasonCode, 'TRADE_SIZE_EXCEEDS_MAXIMUM');
+
+    const oversizedExecute = await postJson(
+      `${baseUrl}/api/protected/trade/execute`,
+      {
+        inputMint: 'So11111111111111111111111111111111111111112',
+        outputMint: 'USD1111111111111111111111111111111111111111',
+        amount: 101,
+        tradeSizeUsd: 10
+      },
+      { cookie: authLogin.cookie }
+    );
+    assert.equal(oversizedExecute.status, 400);
+    assert.equal((await oversizedExecute.json()).reasonCode, 'AMOUNT_EXCEEDS_MAXIMUM');
   } finally {
     app.close();
     fs.rmSync(persistencePath, { force: true });
@@ -630,6 +762,67 @@ test('production cookie security and TLS-aware auth safeguards are enforced', as
     assert.match(cookie, /SameSite=Strict/);
   } finally {
     app.close();
+    fs.rmSync(persistencePath, { force: true });
+  }
+});
+
+test('CORS preflight allowlisting and HTTPS redirects behave as expected', async () => {
+  const persistencePath = dataFilePath('cors-and-redirect');
+  const { createApp, resetState } = loadApp({
+    PERSISTENCE_FILE_PATH: persistencePath,
+    CORS_ALLOWED_ORIGINS: 'https://app.example.com',
+    TRUST_PROXY: 'true'
+  });
+  resetState();
+  const server = await startServer(createApp);
+
+  try {
+    const preflightAllowed = await requestServer(server, {
+      method: 'OPTIONS',
+      path: '/api/auth/challenge',
+      headers: {
+        Origin: 'https://app.example.com',
+        'Access-Control-Request-Method': 'POST'
+      }
+    });
+    assert.equal(preflightAllowed.status, 204);
+    assert.equal(preflightAllowed.headers['access-control-allow-origin'], 'https://app.example.com');
+    assert.match(preflightAllowed.headers['access-control-allow-methods'], /POST/);
+    assert.equal(preflightAllowed.headers.vary, 'Origin');
+
+    const preflightBlocked = await requestServer(server, {
+      method: 'OPTIONS',
+      path: '/api/auth/challenge',
+      headers: {
+        Origin: 'https://evil.example.com',
+        'Access-Control-Request-Method': 'POST'
+      }
+    });
+    assert.equal(preflightBlocked.status, 204);
+    assert.equal(preflightBlocked.headers['access-control-allow-origin'], undefined);
+
+    const redirect = await requestServer(server, {
+      method: 'GET',
+      path: '/healthz?check=1',
+      headers: {
+        Host: 'app.example.com',
+        'X-Forwarded-Proto': 'http'
+      }
+    });
+    assert.equal(redirect.status, 301);
+    assert.equal(redirect.headers.location, 'https://app.example.com/healthz?check=1');
+
+    const localhostNoRedirect = await requestServer(server, {
+      method: 'GET',
+      path: '/healthz',
+      headers: {
+        Host: '127.0.0.1',
+        'X-Forwarded-Proto': 'http'
+      }
+    });
+    assert.equal(localhostNoRedirect.status, 200);
+  } finally {
+    server.app.close();
     fs.rmSync(persistencePath, { force: true });
   }
 });

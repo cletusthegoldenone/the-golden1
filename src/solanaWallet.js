@@ -1,8 +1,9 @@
 const crypto = require('crypto');
-
-const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+const bs58 = require('bs58');
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const MAX_BASE58_LENGTH = 128;
+const ED25519_SIGNATURE_LENGTH = 64;
+const STRICT_BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 function decodeBase58(value) {
   if (typeof value !== 'string' || !value.trim()) {
@@ -12,27 +13,11 @@ function decodeBase58(value) {
     throw new Error('INVALID_BASE58');
   }
 
-  let bytes = [0];
-  for (const char of value.trim()) {
-    const index = BASE58_ALPHABET.indexOf(char);
-    if (index === -1) throw new Error('INVALID_BASE58');
-
-    let carry = index;
-    for (let i = 0; i < bytes.length; i += 1) {
-      carry += bytes[i] * 58;
-      bytes[i] = carry & 0xff;
-      carry >>= 8;
-    }
-    while (carry > 0) {
-      bytes.push(carry & 0xff);
-      carry >>= 8;
-    }
+  try {
+    return Buffer.from(bs58.decode(value.trim()));
+  } catch (_) {
+    throw new Error('INVALID_BASE58');
   }
-
-  let zeros = 0;
-  const trimmed = value.trim();
-  while (zeros < trimmed.length && trimmed[zeros] === '1') zeros += 1;
-  return Buffer.from([...new Array(zeros).fill(0), ...bytes.reverse()]);
 }
 
 function rawPublicKeyToSpki(rawPublicKey) {
@@ -99,26 +84,28 @@ function walletIdentity(walletInput) {
   return `wallet:${crypto.createHash('sha256').update(rawPublicKey).digest('hex').slice(0, 32)}`;
 }
 
+function decodeCanonicalBase64(value) {
+  if (!STRICT_BASE64_RE.test(value)) return null;
+  const buffer = Buffer.from(value, 'base64');
+  if (buffer.length !== ED25519_SIGNATURE_LENGTH) return null;
+  return buffer.toString('base64') === value ? buffer : null;
+}
+
 function decodeSignature(signature) {
   if (!signature || typeof signature !== 'string') {
     throw new Error('AUTH_SIGNATURE_REQUIRED');
   }
 
   const trimmed = signature.trim();
+  const base64 = decodeCanonicalBase64(trimmed);
+  if (base64) return base64;
 
-  // Try base58 first if the string looks like it (all chars in alphabet, reasonable length)
-  if (trimmed.length <= MAX_BASE58_LENGTH && [...trimmed].every((c) => BASE58_ALPHABET.includes(c))) {
-    try {
-      const decoded = decodeBase58(trimmed);
-      if (decoded.length === 64) return decoded;
-    } catch (_) {
-      // fall through to base64
-    }
+  try {
+    const decoded = decodeBase58(trimmed);
+    if (decoded.length === ED25519_SIGNATURE_LENGTH) return decoded;
+  } catch (_) {
+    // fall through
   }
-
-  // Try base64
-  const buffer = Buffer.from(trimmed, 'base64');
-  if (buffer.length === 64) return buffer;
 
   throw new Error('AUTH_SIGNATURE_INVALID');
 }
