@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const http = require('http');
 const { URL } = require('url');
 const { recordConsent, hasAcceptedLatest, getConsentHistory } = require('./legal');
@@ -8,6 +9,10 @@ const {
   AUTH_PROVIDER,
   AUTH_REQUIRE_SECURE_TRANSPORT,
   TRUST_PROXY,
+  SOLANA_RPC_URL,
+  HELIUS_API_KEY,
+  OPERATOR_AUTH_TOKEN,
+  OPERATOR_IDENTITIES,
   productionConfigErrors,
   MAX_BODY_BYTES,
   RATE_LIMIT_PUBLIC_MAX,
@@ -20,6 +25,15 @@ const { createSessionToken, verifySessionToken, tokenFromRequest, sessionCookie,
 const { createAuthProvider, AuthProviderError, walletIdentity } = require('./authProvider');
 const { PersistenceError } = require('./persistence');
 const { RateLimiter } = require('./rateLimit');
+const {
+  ExternalServiceError,
+  evaluateRiskGate,
+  getJupiterQuote,
+  getJupiterSwap,
+  recordTradeAttempt,
+  submitSignedTransaction,
+  updateTradeAttempt
+} = require('./tradeExecution');
 
 const limiter = new RateLimiter();
 const authProvider = createAuthProvider();
@@ -172,10 +186,41 @@ function validateIdentity(value) {
 
 function identityFromBody(body) {
   if (validateIdentity(body?.identity)) return body.identity.trim();
-  if (typeof body?.walletPublicKeyPem === 'string' && body.walletPublicKeyPem.trim()) {
-    return walletIdentity(body.walletPublicKeyPem);
+  try {
+    if (typeof body?.walletPublicKey === 'string' && body.walletPublicKey.trim()) {
+      return walletIdentity({ walletPublicKey: body.walletPublicKey });
+    }
+    if (typeof body?.walletPublicKeyPem === 'string' && body.walletPublicKeyPem.trim()) {
+      return walletIdentity({ walletPublicKeyPem: body.walletPublicKeyPem });
+    }
+  } catch (_) {
+    return null;
   }
   return null;
+}
+
+function requestIdFromRequest(req) {
+  const header = req.headers['x-request-id'] || req.headers['x-correlation-id'];
+  if (typeof header === 'string' && header.trim()) {
+    return header.trim().slice(0, 128);
+  }
+  return crypto.randomUUID();
+}
+
+function operatorAuthorization(identity, req) {
+  const providedToken = req.headers['x-operator-token'] || req.headers['x-operator-secret'];
+  const tokenAuthorized = OPERATOR_AUTH_TOKEN && providedToken === OPERATOR_AUTH_TOKEN;
+  const identityAuthorized = typeof identity === 'string' && OPERATOR_IDENTITIES.includes(identity.toLowerCase());
+  return {
+    ok: !!tokenAuthorized || !!identityAuthorized,
+    actor: identityAuthorized ? identity : tokenAuthorized ? 'operator_secret' : identity || 'anonymous',
+    actorType: identityAuthorized ? 'identity' : tokenAuthorized ? 'secret' : 'unauthorized'
+  };
+}
+
+function appendOperatorAudit(entry) {
+  state.operatorAuditLogs.push(entry);
+  saveState();
 }
 
 function requestIsSecure(req) {
@@ -202,6 +247,12 @@ function errorResponseFromException(error) {
     const status = reasonCode === 'PERSISTENCE_CONFIG_INVALID' ? 500 : 503;
     return { status, body: { error: status === 500 ? 'internal_error' : 'service_unavailable', reasonCode } };
   }
+  if (error instanceof ExternalServiceError) {
+    return {
+      status: error.status,
+      body: { error: error.status >= 500 ? 'bad_gateway' : 'bad_request', reasonCode: error.reasonCode, details: error.details }
+    };
+  }
   return { status: 500, body: { error: 'internal_error' } };
 }
 
@@ -209,6 +260,8 @@ function createApp() {
   return http.createServer(async (req, res) => {
     try {
       const reqUrl = new URL(req.url, 'http://localhost');
+      const requestId = requestIdFromRequest(req);
+      res.setHeader('X-Request-Id', requestId);
       const isProtected = isProtectedPath(reqUrl.pathname);
       const sourceIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
       const scope = isProtected ? 'protected' : 'public';
@@ -245,6 +298,11 @@ function createApp() {
           ok: ready,
           auth: authHealth,
           persistence,
+          rpc: {
+            ok: !!SOLANA_RPC_URL,
+            provider: HELIUS_API_KEY ? 'helius' : 'custom',
+            configured: !!SOLANA_RPC_URL
+          },
           configErrors: runtimeConfigErrors
         });
       }
@@ -303,6 +361,7 @@ function createApp() {
           const verified = authProvider.completeAuth({
             identity: body.identity,
             challengeId: body.challengeId,
+            walletPublicKey: body.walletPublicKey,
             walletPublicKeyPem: body.walletPublicKeyPem,
             signature: body.signature,
             bootstrapToken: req.headers['x-bootstrap-token']
@@ -347,7 +406,10 @@ function createApp() {
         }
 
         try {
-          const challenge = authProvider.beginAuth({ walletPublicKeyPem: body.walletPublicKeyPem });
+          const challenge = authProvider.beginAuth({
+            walletPublicKey: body.walletPublicKey,
+            walletPublicKeyPem: body.walletPublicKeyPem
+          });
           return json(res, 200, { ok: true, authProvider: AUTH_PROVIDER, challenge });
         } catch (error) {
           const response = errorResponseFromException(error);
@@ -485,9 +547,235 @@ function createApp() {
           return json(res, 400, { error: 'invalid_json' });
         }
 
+        const authorization = operatorAuthorization(identity, req);
+        const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+        const auditEntry = {
+          actor: authorization.actor,
+          actorType: authorization.actorType,
+          timestamp: new Date().toISOString(),
+          reason: reason || null,
+          requestId,
+          correlationId: requestId,
+          requestedState: !!body?.enabled,
+          outcome: !authorization.ok ? 'denied' : reason ? 'applied' : 'invalid'
+        };
+        appendOperatorAudit(auditEntry);
+
+        if (!authorization.ok) {
+          return json(res, 403, { error: 'forbidden', reasonCode: 'OPERATOR_AUTH_REQUIRED', requestId });
+        }
+        if (!reason) {
+          return json(res, 400, { error: 'bad_request', reasonCode: 'KILL_SWITCH_REASON_REQUIRED', requestId });
+        }
+
         state.operatorFlags.killSwitch = !!body?.enabled;
         saveState();
-        return json(res, 200, { ok: true, killSwitch: state.operatorFlags.killSwitch });
+        return json(res, 200, {
+          ok: true,
+          killSwitch: state.operatorFlags.killSwitch,
+          audit: { actor: auditEntry.actor, timestamp: auditEntry.timestamp, reason, requestId }
+        });
+      }
+
+      if (req.method === 'POST' && reqUrl.pathname === '/api/protected/trade/execute') {
+        const body = await readBody(req).catch((err) => err);
+        if (body instanceof Error) {
+          if (body.code === 'PAYLOAD_TOO_LARGE') return json(res, 413, { error: 'payload_too_large' });
+          return json(res, 400, { error: 'invalid_json' });
+        }
+
+        const amount = Number(body?.amount);
+        const tradeSizeUsd = Number(body?.tradeSizeUsd ?? 0);
+        const expectedGrossProfitUsd = Number(body?.expectedGrossProfitUsd ?? 0);
+        if (!body?.inputMint || !body?.outputMint || !Number.isFinite(amount) || amount <= 0) {
+          return json(res, 400, { error: 'inputMint, outputMint, and positive amount are required' });
+        }
+        if (!Number.isFinite(tradeSizeUsd) || tradeSizeUsd < 0 || !Number.isFinite(expectedGrossProfitUsd) || expectedGrossProfitUsd < 0) {
+          return json(res, 400, { error: 'tradeSizeUsd and expectedGrossProfitUsd must be valid numbers' });
+        }
+
+        const user = getUser(identity);
+        const attempt = recordTradeAttempt(identity, body, requestId);
+        const auth = evaluateTradeAuthorization(user, {
+          pair: body?.pair || `${body.inputMint}/${body.outputMint}`,
+          action: body?.action || 'swap',
+          tradeSizeUsd,
+          expectedGrossProfitUsd
+        });
+        if (!auth.allowed) {
+          updateTradeAttempt(attempt, {
+            status: 'blocked',
+            failureClass: 'policy_denied',
+            reasonCode: auth.reasonCode,
+            reason: auth.reason,
+            metadata: { authorization: auth }
+          });
+          return json(res, 403, {
+            ok: false,
+            status: 'blocked',
+            failureClass: 'policy_denied',
+            attemptId: attempt.attemptId,
+            reasonCode: auth.reasonCode,
+            reason: auth.reason
+          });
+        }
+
+        const risk = await evaluateRiskGate({
+          inputMint: body.inputMint,
+          outputMint: body.outputMint,
+          requestId
+        });
+        if (!risk.allowed) {
+          updateTradeAttempt(attempt, {
+            status: 'blocked',
+            failureClass: 'risk_denied',
+            reasonCode: risk.reasonCode,
+            reason: risk.reason,
+            riskDecisions: risk.decisions,
+            metadata: { authorization: auth }
+          });
+          return json(res, 403, {
+            ok: false,
+            status: 'blocked',
+            failureClass: 'risk_denied',
+            attemptId: attempt.attemptId,
+            reasonCode: risk.reasonCode,
+            reason: risk.reason,
+            riskDecisions: risk.decisions
+          });
+        }
+
+        updateTradeAttempt(attempt, {
+          riskDecisions: risk.decisions,
+          metadata: { authorization: auth }
+        });
+
+        let quote;
+        try {
+          quote = await getJupiterQuote({
+            inputMint: body.inputMint,
+            outputMint: body.outputMint,
+            amount,
+            slippageBps: body?.slippageBps,
+            requestId
+          });
+        } catch (error) {
+          updateTradeAttempt(attempt, {
+            status: 'failed',
+            failureClass: 'quote_failure',
+            reasonCode: error.reasonCode || 'JUPITER_QUOTE_FAILED',
+            reason: 'Unable to obtain Jupiter quote.'
+          });
+          throw error;
+        }
+
+        const userPublicKey = typeof body?.userPublicKey === 'string' && body.userPublicKey.trim()
+          ? body.userPublicKey.trim()
+          : typeof body?.walletPublicKey === 'string' && body.walletPublicKey.trim()
+            ? body.walletPublicKey.trim()
+            : null;
+        if (!userPublicKey) {
+          updateTradeAttempt(attempt, {
+            status: 'failed',
+            failureClass: 'tx_failure',
+            reasonCode: 'USER_PUBLIC_KEY_REQUIRED',
+            reason: 'userPublicKey is required to build a Jupiter swap transaction.',
+            metadata: {
+              ...attempt.metadata,
+              quote: {
+                inAmount: quote?.inAmount ?? String(amount),
+                outAmount: quote?.outAmount ?? null
+              }
+            }
+          });
+          return json(res, 400, { error: 'userPublicKey is required to prepare a Jupiter swap' });
+        }
+
+        let swap;
+        try {
+          swap = await getJupiterSwap({
+            quoteResponse: quote,
+            userPublicKey,
+            requestId
+          });
+        } catch (error) {
+          updateTradeAttempt(attempt, {
+            status: 'failed',
+            failureClass: 'tx_failure',
+            reasonCode: error.reasonCode || 'JUPITER_SWAP_FAILED',
+            reason: 'Unable to prepare Jupiter swap transaction.'
+          });
+          throw error;
+        }
+
+        if (!swap?.swapTransaction) {
+          updateTradeAttempt(attempt, {
+            status: 'failed',
+            failureClass: 'tx_failure',
+            reasonCode: 'JUPITER_SWAP_FAILED',
+            reason: 'Jupiter swap response did not include a transaction.'
+          });
+          return json(res, 502, { error: 'bad_gateway', reasonCode: 'JUPITER_SWAP_FAILED' });
+        }
+
+        const metadata = {
+          ...attempt.metadata,
+          quote: {
+            inAmount: quote?.inAmount ?? String(amount),
+            outAmount: quote?.outAmount ?? null,
+            routeSegments: Array.isArray(quote?.routePlan) ? quote.routePlan.length : 0
+          },
+          swap: {
+            lastValidBlockHeight: swap?.lastValidBlockHeight ?? null
+          }
+        };
+
+        if (typeof body?.signedTransaction === 'string' && body.signedTransaction.trim()) {
+          try {
+            const txSignature = await submitSignedTransaction({
+              signedTransaction: body.signedTransaction.trim(),
+              requestId
+            });
+            updateTradeAttempt(attempt, {
+              status: 'submitted',
+              reasonCode: 'TX_SUBMITTED',
+              reason: 'Trade submitted to Solana RPC.',
+              txSignature,
+              metadata
+            });
+            return json(res, 202, {
+              ok: true,
+              status: 'submitted',
+              attemptId: attempt.attemptId,
+              txSignature,
+              metadata
+            });
+          } catch (error) {
+            updateTradeAttempt(attempt, {
+              status: 'failed',
+              failureClass: 'tx_failure',
+              reasonCode: error.reasonCode || 'SOLANA_TX_FAILED',
+              reason: 'Failed to submit signed Solana transaction.',
+              metadata
+            });
+            throw error;
+          }
+        }
+
+        updateTradeAttempt(attempt, {
+          status: 'prepared',
+          reasonCode: 'TX_PREPARED',
+          reason: 'Swap transaction prepared for client-side signature/submission.',
+          metadata
+        });
+        return json(res, 200, {
+          ok: true,
+          status: 'prepared',
+          attemptId: attempt.attemptId,
+          swapTransaction: swap.swapTransaction,
+          lastValidBlockHeight: swap?.lastValidBlockHeight ?? null,
+          metadata
+        });
       }
 
       if (req.method === 'GET' && reqUrl.pathname === '/api/protected/tax/export') {

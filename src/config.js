@@ -8,6 +8,14 @@ function boolFromEnv(value, fallback) {
   return value === 'true';
 }
 
+function listFromEnv(value, fallback = []) {
+  if (typeof value !== 'string' || !value.trim()) return fallback;
+  return value
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 const POLICY_VERSIONS = {
   terms: process.env.POLICY_VERSION_TERMS || '2026-08-19',
   riskDisclaimer: process.env.POLICY_VERSION_RISK || '2026-08-19',
@@ -36,6 +44,17 @@ const AUTH_PROVIDER = process.env.AUTH_PROVIDER || (IS_PRODUCTION ? 'wallet_chal
 const AUTH_CHALLENGE_TTL_SECONDS = numberFromEnv(process.env.AUTH_CHALLENGE_TTL_SECONDS, 120);
 const AUTH_REQUIRE_SECURE_TRANSPORT = boolFromEnv(process.env.AUTH_REQUIRE_SECURE_TRANSPORT, IS_PRODUCTION);
 const TRUST_PROXY = boolFromEnv(process.env.TRUST_PROXY, IS_PRODUCTION);
+const HELIUS_API_KEY = process.env.HELIUS_API_KEY || '';
+const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || (HELIUS_API_KEY ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}` : '');
+const JUPITER_QUOTE_API_URL = process.env.JUPITER_QUOTE_API_URL || 'https://quote-api.jup.ag/v6/quote';
+const JUPITER_SWAP_API_URL = process.env.JUPITER_SWAP_API_URL || 'https://quote-api.jup.ag/v6/swap';
+const OPERATOR_AUTH_TOKEN = process.env.OPERATOR_AUTH_TOKEN || '';
+const OPERATOR_IDENTITIES = listFromEnv(process.env.OPERATOR_IDENTITIES);
+const RUGCHECK_ENABLED = process.env.RUGCHECK_ENABLED !== 'false';
+const RUGCHECK_API_URL_TEMPLATE = process.env.RUGCHECK_API_URL_TEMPLATE || 'https://api.rugcheck.xyz/v1/tokens/{mint}/report';
+const RUGCHECK_API_KEY = process.env.RUGCHECK_API_KEY || '';
+const RUGCHECK_TIMEOUT_MS = numberFromEnv(process.env.RUGCHECK_TIMEOUT_MS, 5000);
+const RUGCHECK_HIGH_RISK_LEVELS = listFromEnv(process.env.RUGCHECK_HIGH_RISK_LEVELS, ['high', 'critical', 'danger', 'dangerous', 'scam']);
 
 const PERSISTENCE_FILE_PATH = process.env.PERSISTENCE_FILE_PATH || './data/the-golden1-state.json';
 const PERSISTENCE_ADAPTER = process.env.PERSISTENCE_ADAPTER || 'file';
@@ -57,6 +76,11 @@ function productionConfigErrors() {
   if (SESSION_SECRET === 'dev-session-secret-change-me') errors.push('SESSION_SECRET_DEFAULT_FORBIDDEN_IN_PRODUCTION');
   if (AUTH_PROVIDER === 'wallet_challenge' && SESSION_TTL_SECONDS < 300) {
     errors.push('SESSION_TTL_TOO_SHORT_FOR_PRODUCTION');
+  }
+  if (!HELIUS_API_KEY) errors.push('HELIUS_API_KEY_REQUIRED_IN_PRODUCTION');
+  if (!SOLANA_RPC_URL) errors.push('SOLANA_RPC_URL_REQUIRED_IN_PRODUCTION');
+  if (!OPERATOR_AUTH_TOKEN && OPERATOR_IDENTITIES.length === 0) {
+    errors.push('OPERATOR_AUTH_REQUIRED_IN_PRODUCTION');
   }
   return errors;
 }
@@ -81,6 +105,17 @@ module.exports = {
   AUTH_CHALLENGE_TTL_SECONDS,
   AUTH_REQUIRE_SECURE_TRANSPORT,
   TRUST_PROXY,
+  HELIUS_API_KEY,
+  SOLANA_RPC_URL,
+  JUPITER_QUOTE_API_URL,
+  JUPITER_SWAP_API_URL,
+  OPERATOR_AUTH_TOKEN,
+  OPERATOR_IDENTITIES,
+  RUGCHECK_ENABLED,
+  RUGCHECK_API_URL_TEMPLATE,
+  RUGCHECK_API_KEY,
+  RUGCHECK_TIMEOUT_MS,
+  RUGCHECK_HIGH_RISK_LEVELS,
   RUNTIME_ENV,
   IS_PRODUCTION,
   PERSISTENCE_FILE_PATH,

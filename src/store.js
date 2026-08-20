@@ -49,6 +49,7 @@ function emptyState() {
     users: new Map(),
     consentLogs: [],
     transactions: new Map(),
+    operatorAuditLogs: [],
     operatorFlags: {
       killSwitch: false
     }
@@ -78,6 +79,10 @@ function fromSnapshot(snapshot) {
     }
   }
 
+  if (Array.isArray(snapshot.operatorAuditLogs)) {
+    base.operatorAuditLogs = snapshot.operatorAuditLogs;
+  }
+
   if (snapshot.operatorFlags && typeof snapshot.operatorFlags === 'object') {
     base.operatorFlags = {
       killSwitch: !!snapshot.operatorFlags.killSwitch
@@ -92,6 +97,7 @@ function toSnapshot(current) {
     users: Array.from(current.users.values()),
     consentLogs: current.consentLogs,
     transactions: Array.from(current.transactions.entries()).map(([userId, records]) => ({ userId, records })),
+    operatorAuditLogs: current.operatorAuditLogs,
     operatorFlags: {
       killSwitch: !!current.operatorFlags.killSwitch
     }
@@ -133,6 +139,7 @@ function resetState({ clearPersistence = true } = {}) {
   state.users.clear();
   state.consentLogs.length = 0;
   state.transactions.clear();
+  state.operatorAuditLogs.length = 0;
   state.operatorFlags.killSwitch = false;
   if (clearPersistence) {
     persistence.clear();

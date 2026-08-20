@@ -6,6 +6,39 @@ This README replaces prior draft language and aligns with the final scope discus
 
 ---
 
+## Implemented in Phase 1
+
+- **Wallet-signature authentication** via `/api/auth/challenge` + `/api/session/login` using Solana-compatible Ed25519 signatures, single-use nonces, and TTL-based replay protection.
+- **Bootstrap token auth** remains available for local/dev only and is blocked in production mode.
+- **Operator-only kill switch** now requires an operator secret or allowed operator identity and writes audit metadata (`actor`, `timestamp`, `reason`, `requestId`).
+- **Trade execution pipeline** now records every execution attempt and classifies `policy_denied`, `risk_denied`, `quote_failure`, and `tx_failure` outcomes.
+- **Rugcheck risk gate** runs before Jupiter execution and hard-blocks high-risk tokens with persisted decision metadata.
+- **Helius production config path** is supported through `HELIUS_API_KEY` and derived `SOLANA_RPC_URL`, with readiness failures when required production config is missing.
+
+### Phase 1 environment variables
+
+#### Helius / Solana RPC
+- `HELIUS_API_KEY` — required in production; used to derive the default Helius mainnet RPC URL.
+- `SOLANA_RPC_URL` — optional override for the Solana RPC endpoint; defaults to the Helius URL when `HELIUS_API_KEY` is set.
+
+#### Rugcheck
+- `RUGCHECK_ENABLED` — set to `false` only for local testing.
+- `RUGCHECK_API_URL_TEMPLATE` — Rugcheck endpoint template with `{mint}` placeholder.
+- `RUGCHECK_API_KEY` — optional Rugcheck bearer token if your account requires one.
+- `RUGCHECK_TIMEOUT_MS` — request timeout for Rugcheck checks.
+- `RUGCHECK_HIGH_RISK_LEVELS` — comma-separated levels treated as hard-blocked.
+
+#### Operator auth
+- `OPERATOR_AUTH_TOKEN` — shared operator secret for kill-switch changes.
+- `OPERATOR_IDENTITIES` — comma-separated authenticated identities allowed to act as operators.
+
+### Migration notes
+
+- File-backed state now persists `operatorAuditLogs` and richer `transactions` records for blocked, failed, prepared, and submitted trade attempts.
+- Existing state files remain readable; missing new fields are backfilled in memory on load.
+
+---
+
 ## 1) Product Direction (Final)
 
 The Golden1 is designed around:
@@ -290,4 +323,3 @@ Railway (and any load balancer) can poll the health endpoint:
 | `/api/health` | API | Health / liveness probe |
 | `/readyz` | API | Readiness probe |
 | `/api/legal/accept` | API | Consent submission |
-
