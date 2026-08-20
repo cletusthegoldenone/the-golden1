@@ -208,7 +208,8 @@ function requestIdFromRequest(req) {
 }
 
 function operatorAuthorization(identity, req) {
-  const providedToken = req.headers['x-operator-token'] || req.headers['x-operator-secret'];
+  const rawToken = req.headers['x-operator-token'] || req.headers['x-operator-secret'];
+  const providedToken = Array.isArray(rawToken) ? rawToken[0] : rawToken;
   const tokenAuthorized = OPERATOR_AUTH_TOKEN && providedToken === OPERATOR_AUTH_TOKEN;
   const identityAuthorized = typeof identity === 'string' && OPERATOR_IDENTITIES.includes(identity.toLowerCase());
   return {
@@ -248,9 +249,15 @@ function errorResponseFromException(error) {
     return { status, body: { error: status === 500 ? 'internal_error' : 'service_unavailable', reasonCode } };
   }
   if (error instanceof ExternalServiceError) {
+    let errorLabel;
+    if (error.status >= 500) {
+      errorLabel = error.status === 500 ? 'internal_error' : 'bad_gateway';
+    } else {
+      errorLabel = 'bad_request';
+    }
     return {
       status: error.status,
-      body: { error: error.status >= 500 ? 'bad_gateway' : 'bad_request', reasonCode: error.reasonCode, details: error.details }
+      body: { error: errorLabel, reasonCode: error.reasonCode, details: error.details }
     };
   }
   return { status: 500, body: { error: 'internal_error' } };
@@ -691,7 +698,7 @@ function createApp() {
               }
             }
           });
-          return json(res, 400, { error: 'userPublicKey is required to prepare a Jupiter swap' });
+          return json(res, 400, { error: 'userPublicKey is required to prepare a Jupiter swap', reasonCode: 'USER_PUBLIC_KEY_REQUIRED', requestId });
         }
 
         let swap;

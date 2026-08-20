@@ -2,9 +2,13 @@ const crypto = require('crypto');
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+const MAX_BASE58_LENGTH = 128;
 
 function decodeBase58(value) {
   if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('INVALID_BASE58');
+  }
+  if (value.trim().length > MAX_BASE58_LENGTH) {
     throw new Error('INVALID_BASE58');
   }
 
@@ -26,7 +30,8 @@ function decodeBase58(value) {
   }
 
   let zeros = 0;
-  while (zeros < value.length && value[zeros] === '1') zeros += 1;
+  const trimmed = value.trim();
+  while (zeros < trimmed.length && trimmed[zeros] === '1') zeros += 1;
   return Buffer.from([...new Array(zeros).fill(0), ...bytes.reverse()]);
 }
 
@@ -67,8 +72,16 @@ function parseWalletPublicKey(input) {
 
   if (typeof input.walletPublicKeyPem === 'string' && input.walletPublicKeyPem.trim()) {
     const normalized = input.walletPublicKeyPem.trim();
-    const verifierKey = crypto.createPublicKey(normalized);
-    const der = verifierKey.export({ format: 'der', type: 'spki' });
+    let verifierKey, der;
+    try {
+      verifierKey = crypto.createPublicKey(normalized);
+      if (verifierKey.asymmetricKeyType !== 'ed25519') {
+        throw new Error('not ed25519');
+      }
+      der = verifierKey.export({ format: 'der', type: 'spki' });
+    } catch (_) {
+      throw new Error('AUTH_WALLET_PUBLIC_KEY_INVALID');
+    }
     const rawPublicKey = Buffer.from(der.slice(-32));
     return {
       format: 'pem',
@@ -92,18 +105,22 @@ function decodeSignature(signature) {
   }
 
   const trimmed = signature.trim();
-  try {
-    const buffer = Buffer.from(trimmed, 'base64');
-    if (buffer.length > 0) return buffer;
-  } catch (_) {
-    // fall through
+
+  // Try base58 first if the string looks like it (all chars in alphabet, reasonable length)
+  if (trimmed.length <= MAX_BASE58_LENGTH && [...trimmed].every((c) => BASE58_ALPHABET.includes(c))) {
+    try {
+      const decoded = decodeBase58(trimmed);
+      if (decoded.length === 64) return decoded;
+    } catch (_) {
+      // fall through to base64
+    }
   }
 
-  const decoded = decodeBase58(trimmed);
-  if (!decoded.length) {
-    throw new Error('AUTH_SIGNATURE_INVALID');
-  }
-  return decoded;
+  // Try base64
+  const buffer = Buffer.from(trimmed, 'base64');
+  if (buffer.length === 64) return buffer;
+
+  throw new Error('AUTH_SIGNATURE_INVALID');
 }
 
 module.exports = {
