@@ -221,3 +221,73 @@ Crypto and automated trading are high risk. Losses, including total loss, are po
 ## 14) License
 
 Repository license applies as configured in this project.
+
+---
+
+## 15) Railway Deployment
+
+### Deploy from GitHub
+
+1. Push this repository to GitHub.
+2. Go to [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo**.
+3. Select this repository. Railway auto-detects Node.js via `nixpacks`.
+4. Set the required environment variables (see below).
+5. Railway injects `PORT` automatically — do **not** set it manually.
+6. The app starts with `npm start` (`node src/server.js`).
+
+### Required Environment Variables
+
+| Variable | Description | Production value |
+|---|---|---|
+| `NODE_ENV` | Runtime environment | `production` |
+| `SESSION_SECRET` | Strong random secret for sessions | Generate with `openssl rand -base64 32` |
+| `AUTH_PROVIDER` | Auth strategy | `wallet_challenge` |
+| `AUTH_REQUIRE_SECURE_TRANSPORT` | Enforce HTTPS | `true` |
+| `SESSION_COOKIE_SECURE` | Secure cookie flag | `true` |
+| `TRUST_PROXY` | Trust Railway reverse proxy | `true` |
+| `PERSISTENCE_ADAPTER` | Storage backend | `postgres` (or `file` for ephemeral) |
+| `DATABASE_URL` | PostgreSQL connection string | Set by Railway PostgreSQL plugin |
+
+Copy `.env.example` as a starting point. In the Railway dashboard, add variables under **Settings → Variables**.
+
+### PostgreSQL Setup
+
+1. In your Railway project, click **+ New** → **Database** → **PostgreSQL**.
+2. Railway automatically sets `DATABASE_URL` in your service's environment.
+3. Set `PERSISTENCE_ADAPTER=postgres` in your service variables.
+4. To run DB migrations (when a migration tool is wired): add a **Deploy Command** or run via Railway shell:
+   ```
+   npm run db:migrate
+   ```
+   The `db:migrate` script is a placeholder — replace it with your ORM migration command (e.g. `npx prisma migrate deploy` for Prisma, or `knex migrate:latest` for Knex).
+
+### Health Check Route
+
+Railway (and any load balancer) can poll the health endpoint:
+
+| Path | Description |
+|---|---|
+| `GET /healthz` | Returns `{ ok: true, service: "the-golden1" }` — original liveness probe |
+| `GET /api/health` | Same as `/healthz` (alias added for Railway / standard tooling) |
+| `GET /readyz` | Full readiness check including auth + persistence health |
+
+`railway.toml` is pre-configured with `healthcheckPath = "/api/health"`.
+
+### Suggested Route Structure
+
+| Route | Type | Description |
+|---|---|---|
+| `/` | Marketing | Landing / home page |
+| `/about` | Marketing | About The Golden1 / Cletus |
+| `/how-it-works` | Marketing | Feature explainer |
+| `/docs` | Marketing | Documentation hub |
+| `/blog` | Marketing | Blog / updates |
+| `/legal` | Legal gate | Terms acceptance (required before app access) |
+| `/app` | App shell | Main authenticated trading app |
+| `/app/wallet` | App | Wallet management |
+| `/app/trade` | App | Trade execution |
+| `/app/tax` | App | Tax center |
+| `/api/health` | API | Health / liveness probe |
+| `/readyz` | API | Readiness probe |
+| `/api/legal/accept` | API | Consent submission |
+
