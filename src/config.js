@@ -75,15 +75,7 @@ const RATE_LIMIT_AUTH_MAX = numberFromEnv(process.env.RATE_LIMIT_AUTH_MAX, 10);
 const MAX_TRADE_AMOUNT = numberFromEnv(process.env.MAX_TRADE_AMOUNT, 1e12);
 const MAX_TRADE_SIZE_USD = numberFromEnv(process.env.MAX_TRADE_SIZE_USD, 1000000);
 
-const RATE_LIMIT_AUTH_WINDOW_MS = numberFromEnv(process.env.RATE_LIMIT_AUTH_WINDOW_MS, 900000);
-const RATE_LIMIT_AUTH_MAX = numberFromEnv(process.env.RATE_LIMIT_AUTH_MAX, 10);
-
-const MAX_TRADE_AMOUNT = numberFromEnv(process.env.MAX_TRADE_AMOUNT, 1e12);
-const MAX_TRADE_SIZE_USD = numberFromEnv(process.env.MAX_TRADE_SIZE_USD, 1000000);
-
 const MAX_BODY_BYTES = numberFromEnv(process.env.MAX_BODY_BYTES, 1024 * 1024);
-const CORS_ALLOWED_ORIGINS = process.env.CORS_ALLOWED_ORIGINS || '';
-
 const CORS_ALLOWED_ORIGINS = process.env.CORS_ALLOWED_ORIGINS || '';
 
 function productionConfigErrors() {
