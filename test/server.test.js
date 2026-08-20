@@ -87,8 +87,12 @@ async function startServer(createApp) {
   };
 }
 
+async function closeServerHandle(handle) {
+  await new Promise((resolve) => handle.close(resolve));
+}
+
 async function stopServer(server) {
-  await new Promise((resolve) => server.app.close(resolve));
+  await closeServerHandle(server.app);
 }
 
 async function postJson(url, body, headers = {}) {
@@ -239,7 +243,7 @@ test('protected routes require validated auth session and reject spoofed identit
     assert.equal(mismatchRes.status, 403);
     assert.equal((await mismatchRes.json()).reasonCode, 'AUTH_IDENTITY_MISMATCH');
   } finally {
-    app.close();
+    await closeServerHandle(app);
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -287,7 +291,7 @@ test('file-backed persistence survives restart for consent, onboarding, wallet s
     );
     assert.equal(killSwitchRes.status, 200);
   } finally {
-    server1.app.close();
+    await stopServer(server1);
   }
 
   const second = loadApp({ PERSISTENCE_FILE_PATH: persistencePath, OPERATOR_AUTH_TOKEN: 'durability-operator' });
@@ -318,7 +322,7 @@ test('file-backed persistence survives restart for consent, onboarding, wallet s
     const tradePayload = await tradeRes.json();
     assert.equal(tradePayload.reasonCode, 'GLOBAL_KILL_SWITCH_ACTIVE');
   } finally {
-    server2.app.close();
+    await stopServer(server2);
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -346,7 +350,7 @@ test('rate limiting returns deterministic 429 payloads for public and protected 
     assert.equal(payload.reasonCode, 'RATE_LIMIT_EXCEEDED');
     assert.equal(payload.scope, 'public');
   } finally {
-    publicServer.app.close();
+    await stopServer(publicServer);
     fs.rmSync(publicPersistencePath, { force: true });
   }
 
@@ -379,7 +383,7 @@ test('rate limiting returns deterministic 429 payloads for public and protected 
     assert.equal(protectedPayload.reasonCode, 'RATE_LIMIT_EXCEEDED');
     assert.equal(protectedPayload.scope, 'protected');
   } finally {
-    protectedServer.app.close();
+    await stopServer(protectedServer);
     fs.rmSync(protectedPersistencePath, { force: true });
   }
 });
@@ -478,7 +482,7 @@ test('policy and delegation reason codes remain unchanged with stronger auth/ses
     );
     assert.equal((await tradeRes.json()).reasonCode, 'TRIAL_ENDED_STAKE_REQUIRED');
   } finally {
-    await new Promise((resolve) => app.close(resolve));
+    await closeServerHandle(app);
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -519,7 +523,7 @@ test('trade input upper bounds reject oversized requests before execution', asyn
     assert.equal(oversizedExecute.status, 400);
     assert.equal((await oversizedExecute.json()).reasonCode, 'AMOUNT_EXCEEDS_MAXIMUM');
   } finally {
-    app.close();
+    await closeServerHandle(app);
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -575,7 +579,7 @@ test('wallet challenge auth supports success, invalid signature, replay protecti
     const statusRes = await fetch(`${baseUrl}/api/protected/onboarding/status`, { headers: { cookie } });
     assert.equal(statusRes.status, 200);
   } finally {
-    app.close();
+    await closeServerHandle(app);
     fs.rmSync(persistencePath, { force: true });
   }
 
@@ -602,7 +606,7 @@ test('wallet challenge auth supports success, invalid signature, replay protecti
     assert.equal(loginRes.status, 401);
     assert.equal((await loginRes.json()).reasonCode, 'AUTH_CHALLENGE_EXPIRED');
   } finally {
-    expiryServer.app.close();
+    await stopServer(expiryServer);
     fs.rmSync(expiryPath, { force: true });
   }
 });
@@ -647,7 +651,7 @@ test('kill switch requires operator authorization and persists audit metadata', 
       ]
     );
   } finally {
-    app.close();
+    await closeServerHandle(app);
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -710,8 +714,8 @@ test('rugcheck high-risk block prevents Jupiter execution and records blocked at
     assert.equal(txs[0].requestId, 'risk-block-1');
     assert.equal(txs[0].riskDecisions[0].riskLevel, 'high');
   } finally {
-    app.close();
-    upstream.app.close();
+    await closeServerHandle(app);
+    await closeServerHandle(upstream.app);
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -765,7 +769,7 @@ test('production cookie security and TLS-aware auth safeguards are enforced', as
     assert.match(cookie, /HttpOnly/);
     assert.match(cookie, /SameSite=Strict/);
   } finally {
-    app.close();
+    await closeServerHandle(app);
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -861,7 +865,7 @@ test('readiness and deterministic persistence failures are exposed for managed a
     assert.equal(accept.status, 500);
     assert.equal((await accept.json()).reasonCode, 'PERSISTENCE_CONFIG_INVALID');
   } finally {
-    app.close();
+    await closeServerHandle(app);
     fs.rmSync(persistencePath, { force: true });
   }
 });
