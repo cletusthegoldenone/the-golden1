@@ -1,24 +1,30 @@
 const http = require('http');
 const { URL } = require('url');
 const { recordConsent, hasAcceptedLatest, getConsentHistory } = require('./legal');
-const { getUser, state, saveState, setTransactions } = require('./store');
+const { getUser, state, saveState, setTransactions, persistenceHealth } = require('./store');
 const { evaluateTradeAuthorization } = require('./tradingAuth');
 const { toCsv, summarize, TAX_DISCLAIMER } = require('./taxCenter');
 const {
-  AUTH_BOOTSTRAP_TOKEN,
+  AUTH_PROVIDER,
+  AUTH_REQUIRE_SECURE_TRANSPORT,
+  TRUST_PROXY,
+  productionConfigErrors,
   MAX_BODY_BYTES,
   RATE_LIMIT_PUBLIC_MAX,
   RATE_LIMIT_PUBLIC_WINDOW_MS,
   RATE_LIMIT_PROTECTED_MAX,
   RATE_LIMIT_PROTECTED_WINDOW_MS,
-  SESSION_COOKIE_NAME,
   SESSION_TTL_SECONDS,
   OPERATOR_TOKEN
 } = require('./config');
-const { createSessionToken, verifySessionToken, tokenFromRequest, sessionCookie } = require('./auth');
+const { createSessionToken, verifySessionToken, tokenFromRequest, sessionCookie, clearSessionCookie } = require('./auth');
+const { createAuthProvider, AuthProviderError, walletIdentity } = require('./authProvider');
+const { PersistenceError } = require('./persistence');
 const { RateLimiter } = require('./rateLimit');
 
 const limiter = new RateLimiter();
+const authProvider = createAuthProvider();
+const runtimeConfigErrors = productionConfigErrors();
 
 function securityHeaders() {
   return {
@@ -208,15 +214,39 @@ function validateIdentity(value) {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= 128;
 }
 
-function validateBootstrapToken(req) {
-  const token = req.headers['x-bootstrap-token'];
-  if (!token) {
-    return { ok: false, status: 401, body: { error: 'unauthorized', reasonCode: 'AUTH_BOOTSTRAP_REQUIRED' } };
+function identityFromBody(body) {
+  if (validateIdentity(body?.identity)) return body.identity.trim();
+  if (typeof body?.walletPublicKeyPem === 'string' && body.walletPublicKeyPem.trim()) {
+    return walletIdentity(body.walletPublicKeyPem);
   }
-  if (token !== AUTH_BOOTSTRAP_TOKEN) {
-    return { ok: false, status: 401, body: { error: 'unauthorized', reasonCode: 'AUTH_BOOTSTRAP_INVALID' } };
+  return null;
+}
+
+function requestIsSecure(req) {
+  if (req.socket && req.socket.encrypted) return true;
+  if (!TRUST_PROXY) return false;
+  const proto = req.headers['x-forwarded-proto'];
+  if (typeof proto !== 'string') return false;
+  return proto.split(',').map((value) => value.trim().toLowerCase()).includes('https');
+}
+
+function authTransportGuard(req) {
+  if (!AUTH_REQUIRE_SECURE_TRANSPORT) return null;
+  if (requestIsSecure(req)) return null;
+  return { status: 400, body: { error: 'bad_request', reasonCode: 'AUTH_TLS_REQUIRED' } };
+}
+
+function errorResponseFromException(error) {
+  if (error instanceof AuthProviderError) {
+    const status = Number.isInteger(error.status) ? error.status : 401;
+    return { status, body: { error: status === 503 ? 'service_unavailable' : 'unauthorized', reasonCode: error.reasonCode } };
   }
-  return { ok: true };
+  if (error instanceof PersistenceError) {
+    const reasonCode = error.reasonCode || 'PERSISTENCE_UNAVAILABLE';
+    const status = reasonCode === 'PERSISTENCE_CONFIG_INVALID' ? 500 : 503;
+    return { status, body: { error: status === 500 ? 'internal_error' : 'service_unavailable', reasonCode } };
+  }
+  return { status: 500, body: { error: 'internal_error' } };
 }
 
 function validateOperatorToken(req) {
@@ -259,6 +289,18 @@ function createApp() {
         return;
       }
 
+      if (req.method === 'GET' && reqUrl.pathname === '/readyz') {
+        const authHealth = authProvider.health();
+        const persistence = persistenceHealth();
+        const ready = runtimeConfigErrors.length === 0 && authHealth.ok && persistence.ok;
+        return json(res, ready ? 200 : 503, {
+          ok: ready,
+          auth: authHealth,
+          persistence,
+          configErrors: runtimeConfigErrors
+        });
+      }
+
       if (req.method === 'POST' && reqUrl.pathname === '/api/legal/accept') {
         const body = await readBody(req).catch((err) => err);
         if (body instanceof Error) {
@@ -266,11 +308,12 @@ function createApp() {
           return json(res, 400, { error: 'invalid_json' });
         }
 
-        if (!validateIdentity(body.identity) || body.accepted !== true) {
+        const identity = identityFromBody(body);
+        if (!identity || body.accepted !== true) {
           return json(res, 400, { error: 'identity and accepted=true required' });
         }
         const log = recordConsent({
-          identity: body.identity.trim(),
+          identity,
           accepted: body.accepted,
           sessionId: req.headers['x-session-id'],
           ip: sourceIp,
@@ -286,20 +329,20 @@ function createApp() {
           return json(res, 400, { error: 'invalid_json' });
         }
 
-        if (!validateIdentity(body.identity)) return json(res, 400, { error: 'identity required' });
-        const normalizedIdentity = body.identity.trim();
-        if (!hasAcceptedLatest(normalizedIdentity)) {
+        const identity = identityFromBody(body);
+        if (!identity) return json(res, 400, { error: 'identity required' });
+        if (!hasAcceptedLatest(identity)) {
           return json(res, 403, { blocked: true, reasonCode: 'LEGAL_ACCEPTANCE_REQUIRED', legalPath: '/legal' });
         }
-        const user = getUser(normalizedIdentity);
+        const user = getUser(identity);
         user.onboarding.accountCreated = true;
         saveState();
         return json(res, 200, { ok: true, onboarding: onboardingStatus(user.onboarding) });
       }
 
       if (req.method === 'POST' && reqUrl.pathname === '/api/session/login') {
-        const bootstrap = validateBootstrapToken(req);
-        if (!bootstrap.ok) return json(res, bootstrap.status, bootstrap.body);
+        const authTransportFailure = authTransportGuard(req);
+        if (authTransportFailure) return json(res, authTransportFailure.status, authTransportFailure.body);
 
         const body = await readBody(req).catch((err) => err);
         if (body instanceof Error) {
@@ -307,22 +350,37 @@ function createApp() {
           return json(res, 400, { error: 'invalid_json' });
         }
 
-        if (!validateIdentity(body.identity)) {
-          return json(res, 400, { error: 'identity required' });
+        let authIdentity;
+        try {
+          const verified = authProvider.completeAuth({
+            identity: body.identity,
+            challengeId: body.challengeId,
+            walletPublicKeyPem: body.walletPublicKeyPem,
+            signature: body.signature,
+            bootstrapToken: req.headers['x-bootstrap-token']
+          });
+          authIdentity = verified.identity;
+        } catch (error) {
+          const response = errorResponseFromException(error);
+          return json(res, response.status, response.body);
         }
 
-        const normalizedIdentity = body.identity.trim();
-        if (!hasAcceptedLatest(normalizedIdentity)) {
+        if (!validateIdentity(authIdentity)) {
+          return json(res, 401, { error: 'unauthorized', reasonCode: 'AUTH_IDENTITY_REQUIRED' });
+        }
+
+        if (!hasAcceptedLatest(authIdentity)) {
           return json(res, 403, { blocked: true, reasonCode: 'LEGAL_ACCEPTANCE_REQUIRED', legalPath: '/legal' });
         }
 
-        const token = createSessionToken(normalizedIdentity);
+        const token = createSessionToken(authIdentity);
         return json(
           res,
           200,
           {
             ok: true,
-            identity: normalizedIdentity,
+            identity: authIdentity,
+            authProvider: AUTH_PROVIDER,
             expiresInSeconds: SESSION_TTL_SECONDS,
             token
           },
@@ -330,15 +388,27 @@ function createApp() {
         );
       }
 
+      if (req.method === 'POST' && reqUrl.pathname === '/api/auth/challenge') {
+        const authTransportFailure = authTransportGuard(req);
+        if (authTransportFailure) return json(res, authTransportFailure.status, authTransportFailure.body);
+
+        const body = await readBody(req).catch((err) => err);
+        if (body instanceof Error) {
+          if (body.code === 'PAYLOAD_TOO_LARGE') return json(res, 413, { error: 'payload_too_large' });
+          return json(res, 400, { error: 'invalid_json' });
+        }
+
+        try {
+          const challenge = authProvider.beginAuth({ walletPublicKeyPem: body.walletPublicKeyPem });
+          return json(res, 200, { ok: true, authProvider: AUTH_PROVIDER, challenge });
+        } catch (error) {
+          const response = errorResponseFromException(error);
+          return json(res, response.status, response.body);
+        }
+      }
+
       if (req.method === 'POST' && reqUrl.pathname === '/api/session/logout') {
-        return json(
-          res,
-          200,
-          { ok: true },
-          {
-            'Set-Cookie': `${SESSION_COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0`
-          }
-        );
+        return json(res, 200, { ok: true }, { 'Set-Cookie': clearSessionCookie() });
       }
 
       if (req.method === 'POST' && reqUrl.pathname === '/api/protected/onboarding/profile') {
@@ -581,8 +651,9 @@ function createApp() {
       }
 
       return json(res, 404, { error: 'not_found' });
-    } catch (_) {
-      return json(res, 500, { error: 'internal_error' });
+    } catch (error) {
+      const response = errorResponseFromException(error);
+      return json(res, response.status, response.body);
     }
   });
 }

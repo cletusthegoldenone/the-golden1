@@ -11,6 +11,8 @@ const MODULES_TO_CLEAR = [
   'src/store.js',
   'src/legal.js',
   'src/auth.js',
+  'src/authProvider.js',
+  'src/persistence.js',
   'src/tradingAuth.js',
   'src/rateLimit.js'
 ].map((relativePath) => path.join(ROOT, relativePath));
@@ -24,10 +26,21 @@ function clearAppModules() {
 function setupEnv(overrides = {}) {
   process.env.SESSION_SECRET = overrides.SESSION_SECRET || 'test-session-secret';
   process.env.AUTH_BOOTSTRAP_TOKEN = overrides.AUTH_BOOTSTRAP_TOKEN || 'test-bootstrap-token';
+  process.env.AUTH_PROVIDER = overrides.AUTH_PROVIDER || 'bootstrap';
+  process.env.AUTH_CHALLENGE_TTL_SECONDS = overrides.AUTH_CHALLENGE_TTL_SECONDS || '120';
+  process.env.AUTH_REQUIRE_SECURE_TRANSPORT = overrides.AUTH_REQUIRE_SECURE_TRANSPORT || 'false';
+  process.env.TRUST_PROXY = overrides.TRUST_PROXY || 'true';
+  process.env.NODE_ENV = overrides.NODE_ENV || 'test';
   process.env.SESSION_TTL_SECONDS = overrides.SESSION_TTL_SECONDS || '3600';
   process.env.SESSION_COOKIE_NAME = overrides.SESSION_COOKIE_NAME || 'tg1_session';
   process.env.OPERATOR_TOKEN = overrides.OPERATOR_TOKEN || 'test-operator-token';
+  process.env.SESSION_COOKIE_SECURE = overrides.SESSION_COOKIE_SECURE || 'false';
+  process.env.SESSION_COOKIE_SAME_SITE = overrides.SESSION_COOKIE_SAME_SITE || 'Strict';
+  process.env.SESSION_COOKIE_PATH = overrides.SESSION_COOKIE_PATH || '/';
+  process.env.SESSION_COOKIE_DOMAIN = overrides.SESSION_COOKIE_DOMAIN || '';
   process.env.PERSISTENCE_FILE_PATH = overrides.PERSISTENCE_FILE_PATH;
+  process.env.PERSISTENCE_ADAPTER = overrides.PERSISTENCE_ADAPTER || 'file';
+  process.env.DATABASE_URL = overrides.DATABASE_URL || '';
   process.env.RATE_LIMIT_PUBLIC_MAX = overrides.RATE_LIMIT_PUBLIC_MAX || '1000';
   process.env.RATE_LIMIT_PUBLIC_WINDOW_MS = overrides.RATE_LIMIT_PUBLIC_WINDOW_MS || '60000';
   process.env.RATE_LIMIT_PROTECTED_MAX = overrides.RATE_LIMIT_PROTECTED_MAX || '1000';
@@ -77,6 +90,17 @@ async function login(baseUrl, identity, token = 'test-bootstrap-token') {
   return {
     res,
     cookie: res.headers.get('set-cookie')
+  };
+}
+
+function createWalletSigner() {
+  const { generateKeyPairSync, sign } = require('crypto');
+  const pair = generateKeyPairSync('ed25519');
+  return {
+    publicKeyPem: pair.publicKey.export({ type: 'spki', format: 'pem' }),
+    sign(message) {
+      return sign(null, Buffer.from(message), pair.privateKey).toString('base64');
+    }
   };
 }
 
@@ -309,6 +333,166 @@ test('policy and delegation reason codes remain unchanged with stronger auth/ses
       { cookie: authLogin.cookie }
     );
     assert.equal((await tradeRes.json()).reasonCode, 'TRIAL_ENDED_STAKE_REQUIRED');
+  } finally {
+    app.close();
+    fs.rmSync(persistencePath, { force: true });
+  }
+});
+
+test('wallet challenge auth supports success, invalid signature, replay protection, and expiry codes', async () => {
+  const persistencePath = dataFilePath('wallet-auth');
+  const { createApp, resetState } = loadApp({
+    PERSISTENCE_FILE_PATH: persistencePath,
+    AUTH_PROVIDER: 'wallet_challenge',
+    AUTH_REQUIRE_SECURE_TRANSPORT: 'false'
+  });
+  resetState();
+  const { app, baseUrl } = await startServer(createApp);
+  const wallet = createWalletSigner();
+
+  try {
+    const acceptRes = await postJson(`${baseUrl}/api/legal/accept`, { walletPublicKeyPem: wallet.publicKeyPem, accepted: true });
+    assert.equal(acceptRes.status, 200);
+    const registerRes = await postJson(`${baseUrl}/api/register`, { walletPublicKeyPem: wallet.publicKeyPem });
+    assert.equal(registerRes.status, 200);
+
+    const challengeRes = await postJson(`${baseUrl}/api/auth/challenge`, { walletPublicKeyPem: wallet.publicKeyPem });
+    assert.equal(challengeRes.status, 200);
+    const challenge = (await challengeRes.json()).challenge;
+
+    const invalidSignatureRes = await postJson(`${baseUrl}/api/session/login`, {
+      walletPublicKeyPem: wallet.publicKeyPem,
+      challengeId: challenge.challengeId,
+      signature: 'not-a-valid-signature'
+    });
+    assert.equal(invalidSignatureRes.status, 401);
+    assert.equal((await invalidSignatureRes.json()).reasonCode, 'AUTH_SIGNATURE_INVALID');
+
+    const secondChallengeRes = await postJson(`${baseUrl}/api/auth/challenge`, { walletPublicKeyPem: wallet.publicKeyPem });
+    const secondChallenge = (await secondChallengeRes.json()).challenge;
+    const loginRes = await postJson(`${baseUrl}/api/session/login`, {
+      walletPublicKeyPem: wallet.publicKeyPem,
+      challengeId: secondChallenge.challengeId,
+      signature: wallet.sign(secondChallenge.message)
+    });
+    assert.equal(loginRes.status, 200);
+    const cookie = loginRes.headers.get('set-cookie');
+    assert.ok(cookie);
+
+    const replayRes = await postJson(`${baseUrl}/api/session/login`, {
+      walletPublicKeyPem: wallet.publicKeyPem,
+      challengeId: secondChallenge.challengeId,
+      signature: wallet.sign(secondChallenge.message)
+    });
+    assert.equal(replayRes.status, 401);
+    assert.equal((await replayRes.json()).reasonCode, 'AUTH_CHALLENGE_REPLAYED');
+
+    const statusRes = await fetch(`${baseUrl}/api/protected/onboarding/status`, { headers: { cookie } });
+    assert.equal(statusRes.status, 200);
+  } finally {
+    app.close();
+    fs.rmSync(persistencePath, { force: true });
+  }
+
+  const expiryPath = dataFilePath('wallet-auth-expiry');
+  const expiring = loadApp({
+    PERSISTENCE_FILE_PATH: expiryPath,
+    AUTH_PROVIDER: 'wallet_challenge',
+    AUTH_CHALLENGE_TTL_SECONDS: '-1',
+    AUTH_REQUIRE_SECURE_TRANSPORT: 'false'
+  });
+  expiring.resetState();
+  const expiryServer = await startServer(expiring.createApp);
+  const wallet2 = createWalletSigner();
+  try {
+    await postJson(`${expiryServer.baseUrl}/api/legal/accept`, { walletPublicKeyPem: wallet2.publicKeyPem, accepted: true });
+    await postJson(`${expiryServer.baseUrl}/api/register`, { walletPublicKeyPem: wallet2.publicKeyPem });
+    const challengeRes = await postJson(`${expiryServer.baseUrl}/api/auth/challenge`, { walletPublicKeyPem: wallet2.publicKeyPem });
+    const challenge = (await challengeRes.json()).challenge;
+    const loginRes = await postJson(`${expiryServer.baseUrl}/api/session/login`, {
+      walletPublicKeyPem: wallet2.publicKeyPem,
+      challengeId: challenge.challengeId,
+      signature: wallet2.sign(challenge.message)
+    });
+    assert.equal(loginRes.status, 401);
+    assert.equal((await loginRes.json()).reasonCode, 'AUTH_CHALLENGE_EXPIRED');
+  } finally {
+    expiryServer.app.close();
+    fs.rmSync(expiryPath, { force: true });
+  }
+});
+
+test('production cookie security and TLS-aware auth safeguards are enforced', async () => {
+  const persistencePath = dataFilePath('prod-cookie');
+  const appModules = loadApp({
+    PERSISTENCE_FILE_PATH: persistencePath,
+    AUTH_PROVIDER: 'wallet_challenge',
+    NODE_ENV: 'production',
+    SESSION_COOKIE_SECURE: 'true',
+    AUTH_REQUIRE_SECURE_TRANSPORT: 'true',
+    TRUST_PROXY: 'true'
+  });
+  appModules.resetState();
+  const { app, baseUrl } = await startServer(appModules.createApp);
+  const wallet = createWalletSigner();
+  const secureHeaders = { 'x-forwarded-proto': 'https' };
+
+  try {
+    const challengeBlocked = await postJson(`${baseUrl}/api/auth/challenge`, { walletPublicKeyPem: wallet.publicKeyPem });
+    assert.equal(challengeBlocked.status, 400);
+    assert.equal((await challengeBlocked.json()).reasonCode, 'AUTH_TLS_REQUIRED');
+
+    const acceptRes = await postJson(
+      `${baseUrl}/api/legal/accept`,
+      { walletPublicKeyPem: wallet.publicKeyPem, accepted: true },
+      secureHeaders
+    );
+    assert.equal(acceptRes.status, 200);
+    const registerRes = await postJson(`${baseUrl}/api/register`, { walletPublicKeyPem: wallet.publicKeyPem }, secureHeaders);
+    assert.equal(registerRes.status, 200);
+
+    const challengeRes = await postJson(`${baseUrl}/api/auth/challenge`, { walletPublicKeyPem: wallet.publicKeyPem }, secureHeaders);
+    const challenge = (await challengeRes.json()).challenge;
+
+    const loginRes = await postJson(
+      `${baseUrl}/api/session/login`,
+      {
+        walletPublicKeyPem: wallet.publicKeyPem,
+        challengeId: challenge.challengeId,
+        signature: wallet.sign(challenge.message)
+      },
+      secureHeaders
+    );
+    assert.equal(loginRes.status, 200);
+    const cookie = loginRes.headers.get('set-cookie');
+    assert.match(cookie, /Secure/);
+    assert.match(cookie, /HttpOnly/);
+    assert.match(cookie, /SameSite=Strict/);
+  } finally {
+    app.close();
+    fs.rmSync(persistencePath, { force: true });
+  }
+});
+
+test('readiness and deterministic persistence failures are exposed for managed adapter path', async () => {
+  const persistencePath = dataFilePath('postgres-ready');
+  const appModules = loadApp({
+    PERSISTENCE_FILE_PATH: persistencePath,
+    PERSISTENCE_ADAPTER: 'postgres',
+    DATABASE_URL: '',
+    AUTH_REQUIRE_SECURE_TRANSPORT: 'false'
+  });
+  const { app, baseUrl } = await startServer(appModules.createApp);
+
+  try {
+    const ready = await fetch(`${baseUrl}/readyz`);
+    assert.equal(ready.status, 503);
+    const readyPayload = await ready.json();
+    assert.equal(readyPayload.persistence.reasonCode, 'PERSISTENCE_CONFIG_INVALID');
+
+    const accept = await postJson(`${baseUrl}/api/legal/accept`, { identity: 'u-persist', accepted: true });
+    assert.equal(accept.status, 500);
+    assert.equal((await accept.json()).reasonCode, 'PERSISTENCE_CONFIG_INVALID');
   } finally {
     app.close();
     fs.rmSync(persistencePath, { force: true });

@@ -1,6 +1,13 @@
 const fs = require('fs');
 const path = require('path');
 
+class PersistenceError extends Error {
+  constructor(reasonCode, message = reasonCode) {
+    super(message);
+    this.reasonCode = reasonCode;
+  }
+}
+
 function createFilePersistence(filePath) {
   const absolutePath = path.resolve(filePath);
 
@@ -23,10 +30,48 @@ function createFilePersistence(filePath) {
         fs.unlinkSync(absolutePath);
       }
     },
+    health() {
+      return { ok: true, adapter: 'file', path: absolutePath };
+    },
     path: absolutePath
   };
 }
 
+function createPostgresPersistence(connectionString) {
+  const configured = typeof connectionString === 'string' && connectionString.trim().length > 0;
+
+  function unavailable() {
+    if (!configured) {
+      throw new PersistenceError('PERSISTENCE_CONFIG_INVALID', 'DATABASE_URL is required for postgres adapter');
+    }
+    throw new PersistenceError(
+      'PERSISTENCE_UNAVAILABLE',
+      'Postgres adapter scaffold is enabled but no runtime driver is wired yet'
+    );
+  }
+
+  return {
+    load() {
+      unavailable();
+    },
+    save() {
+      unavailable();
+    },
+    clear() {
+      unavailable();
+    },
+    health() {
+      if (!configured) return { ok: false, adapter: 'postgres', reasonCode: 'PERSISTENCE_CONFIG_INVALID' };
+      return { ok: false, adapter: 'postgres', reasonCode: 'PERSISTENCE_UNAVAILABLE' };
+    },
+    withTransaction() {
+      unavailable();
+    }
+  };
+}
+
 module.exports = {
-  createFilePersistence
+  PersistenceError,
+  createFilePersistence,
+  createPostgresPersistence
 };
