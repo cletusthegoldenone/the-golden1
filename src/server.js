@@ -44,6 +44,23 @@ const limiter = new RateLimiter();
 const authLimiter = new RateLimiter();
 const authProvider = createAuthProvider();
 const runtimeConfigErrors = productionConfigErrors();
+const ALLOWED_ORIGINS_SET = new Set(
+  CORS_ALLOWED_ORIGINS
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
+const REDIRECT_HOSTS_SET = new Set(
+  [...ALLOWED_ORIGINS_SET]
+    .map((origin) => {
+      try {
+        return new URL(origin).host.toLowerCase();
+      } catch (_) {
+        return null;
+      }
+    })
+    .filter(Boolean)
+);
 
 function securityHeaders() {
   return {
@@ -54,20 +71,17 @@ function securityHeaders() {
   };
 }
 
-const ALLOWED_ORIGINS_SET = CORS_ALLOWED_ORIGINS
-  ? new Set(CORS_ALLOWED_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean))
-  : new Set();
-
 function corsHeaders(req) {
-  const origin = req.headers['origin'];
-  if (!origin || ALLOWED_ORIGINS_SET.size === 0) return {};
-  if (!ALLOWED_ORIGINS_SET.has(origin)) return {};
+  const origin = req.headers.origin;
+  if (typeof origin !== 'string' || !ALLOWED_ORIGINS_SET.has(origin)) {
+    return {};
+  }
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Request-Id, X-Bootstrap-Token',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Request-Id, X-Correlation-Id, X-Bootstrap-Token',
     'Access-Control-Allow-Credentials': 'true',
-    'Vary': 'Origin'
+    Vary: 'Origin'
   };
 }
 
@@ -222,19 +236,22 @@ function identityFromBody(body) {
   return null;
 }
 
-const SAFE_REQUEST_ID_RE = /^[A-Za-z0-9\-_.]{1,128}$/;
+const SAFE_REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 
 function requestIdFromRequest(req) {
   const header = req.headers['x-request-id'] || req.headers['x-correlation-id'];
   if (typeof header === 'string') {
     const trimmed = header.trim();
-    if (SAFE_REQUEST_ID_RE.test(trimmed)) return trimmed;
+    if (SAFE_REQUEST_ID_RE.test(trimmed)) {
+      return trimmed;
+    }
   }
   return crypto.randomUUID();
 }
 
 function operatorAuthorization(identity, req) {
-  const providedToken = req.headers['x-operator-token'] || req.headers['x-operator-secret'];
+  const rawToken = req.headers['x-operator-token'] || req.headers['x-operator-secret'];
+  const providedToken = Array.isArray(rawToken) ? rawToken[0] : rawToken;
   const tokenAuthorized = OPERATOR_AUTH_TOKEN && providedToken === OPERATOR_AUTH_TOKEN;
   const identityAuthorized = typeof identity === 'string' && OPERATOR_IDENTITIES.includes(identity.toLowerCase());
   return {
@@ -257,6 +274,34 @@ function requestIsSecure(req) {
   return proto.split(',').map((value) => value.trim().toLowerCase()).includes('https');
 }
 
+function requestIpFromRequest(req) {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  const headerValue = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor;
+  if (typeof headerValue === 'string') {
+    const first = headerValue.split(',').map((entry) => entry.trim()).find(Boolean);
+    if (first) return first;
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+
+function hostIsLoopback(host) {
+  if (typeof host !== 'string' || !host.trim()) return false;
+  try {
+    const { hostname } = new URL(`http://${host}`);
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  } catch (_) {
+    return false;
+  }
+}
+
+function redirectHostFromRequest(req) {
+  const host = typeof req.headers.host === 'string' ? req.headers.host.trim().toLowerCase() : '';
+  if (!host || hostIsLoopback(host) || REDIRECT_HOSTS_SET.size === 0 || !REDIRECT_HOSTS_SET.has(host)) {
+    return null;
+  }
+  return host;
+}
+
 function authTransportGuard(req) {
   if (!AUTH_REQUIRE_SECURE_TRANSPORT) return null;
   if (requestIsSecure(req)) return null;
@@ -274,9 +319,15 @@ function errorResponseFromException(error) {
     return { status, body: { error: status === 500 ? 'internal_error' : 'service_unavailable', reasonCode } };
   }
   if (error instanceof ExternalServiceError) {
+    let errorLabel;
+    if (error.status >= 500) {
+      errorLabel = error.status === 500 ? 'internal_error' : 'bad_gateway';
+    } else {
+      errorLabel = 'bad_request';
+    }
     return {
       status: error.status,
-      body: { error: error.status >= 500 ? 'bad_gateway' : 'bad_request', reasonCode: error.reasonCode, details: error.details }
+      body: { error: errorLabel, reasonCode: error.reasonCode, details: error.details }
     };
   }
   return { status: 500, body: { error: 'internal_error' } };
@@ -288,33 +339,29 @@ function createApp() {
       const reqUrl = new URL(req.url, 'http://localhost');
       const requestId = requestIdFromRequest(req);
       res.setHeader('X-Request-Id', requestId);
-
-      // Apply CORS headers to every response for matching origins.
       const cors = corsHeaders(req);
       for (const [header, value] of Object.entries(cors)) {
         res.setHeader(header, value);
       }
 
-      // Handle CORS pre-flight before rate limiting or auth.
       if (req.method === 'OPTIONS') {
         res.writeHead(204, { ...securityHeaders(), ...cors });
         res.end();
         return;
       }
 
-      // Enforce HTTPS redirect in production when the request arrived over HTTP.
-      if (TRUST_PROXY && !requestIsSecure(req)) {
-        const host = req.headers['host'];
-        if (host && host !== 'localhost' && !host.startsWith('localhost:') && !host.startsWith('127.') && !host.startsWith('[::1]')) {
-          const redirectUrl = `https://${host}${req.url}`;
-          res.writeHead(301, { ...securityHeaders(), Location: redirectUrl });
-          res.end();
-          return;
-        }
+      const redirectHost = redirectHostFromRequest(req);
+      if (TRUST_PROXY && redirectHost && !requestIsSecure(req)) {
+        res.writeHead(301, {
+          ...securityHeaders(),
+          Location: `https://${redirectHost}${req.url}`
+        });
+        res.end();
+        return;
       }
 
       const isProtected = isProtectedPath(reqUrl.pathname);
-      const sourceIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+      const sourceIp = requestIpFromRequest(req);
       const scope = isProtected ? 'protected' : 'public';
       const limit = isProtected ? RATE_LIMIT_PROTECTED_MAX : RATE_LIMIT_PUBLIC_MAX;
       const windowMs = isProtected ? RATE_LIMIT_PROTECTED_WINDOW_MS : RATE_LIMIT_PUBLIC_WINDOW_MS;
@@ -403,7 +450,6 @@ function createApp() {
       if (req.method === 'POST' && reqUrl.pathname === '/api/session/login') {
         const authTransportFailure = authTransportGuard(req);
         if (authTransportFailure) return json(res, authTransportFailure.status, authTransportFailure.body);
-
         const authRate = authLimiter.consume({ key: `auth:${sourceIp}`, limit: RATE_LIMIT_AUTH_MAX, windowMs: RATE_LIMIT_AUTH_WINDOW_MS });
         if (!authRate.allowed) {
           return rateLimitExceeded(res, 'auth', authRate.retryAfterSeconds);
@@ -457,7 +503,6 @@ function createApp() {
       if (req.method === 'POST' && reqUrl.pathname === '/api/auth/challenge') {
         const authTransportFailure = authTransportGuard(req);
         if (authTransportFailure) return json(res, authTransportFailure.status, authTransportFailure.body);
-
         const authRate = authLimiter.consume({ key: `auth:${sourceIp}`, limit: RATE_LIMIT_AUTH_MAX, windowMs: RATE_LIMIT_AUTH_WINDOW_MS });
         if (!authRate.allowed) {
           return rateLimitExceeded(res, 'auth', authRate.retryAfterSeconds);
@@ -761,7 +806,7 @@ function createApp() {
               }
             }
           });
-          return json(res, 400, { error: 'userPublicKey is required to prepare a Jupiter swap' });
+          return json(res, 400, { error: 'userPublicKey is required to prepare a Jupiter swap', reasonCode: 'USER_PUBLIC_KEY_REQUIRED', requestId });
         }
 
         let swap;

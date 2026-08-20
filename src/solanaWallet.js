@@ -1,12 +1,18 @@
 const crypto = require('crypto');
 const bs58 = require('bs58');
-
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+const MAX_BASE58_LENGTH = 128;
+const ED25519_SIGNATURE_LENGTH = 64;
+const STRICT_BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 function decodeBase58(value) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error('INVALID_BASE58');
   }
+  if (value.trim().length > MAX_BASE58_LENGTH) {
+    throw new Error('INVALID_BASE58');
+  }
+
   try {
     return Buffer.from(bs58.decode(value.trim()));
   } catch (_) {
@@ -51,8 +57,16 @@ function parseWalletPublicKey(input) {
 
   if (typeof input.walletPublicKeyPem === 'string' && input.walletPublicKeyPem.trim()) {
     const normalized = input.walletPublicKeyPem.trim();
-    const verifierKey = crypto.createPublicKey(normalized);
-    const der = verifierKey.export({ format: 'der', type: 'spki' });
+    let verifierKey, der;
+    try {
+      verifierKey = crypto.createPublicKey(normalized);
+      if (verifierKey.asymmetricKeyType !== 'ed25519') {
+        throw new Error('not ed25519');
+      }
+      der = verifierKey.export({ format: 'der', type: 'spki' });
+    } catch (_) {
+      throw new Error('AUTH_WALLET_PUBLIC_KEY_INVALID');
+    }
     const rawPublicKey = Buffer.from(der.slice(-32));
     return {
       format: 'pem',
@@ -70,7 +84,11 @@ function walletIdentity(walletInput) {
   return `wallet:${crypto.createHash('sha256').update(rawPublicKey).digest('hex').slice(0, 32)}`;
 }
 
-const ED25519_SIGNATURE_LENGTH = 64;
+function decodeCanonicalBase64(value) {
+  if (!STRICT_BASE64_RE.test(value)) return null;
+  const buffer = Buffer.from(value, 'base64');
+  return buffer.length === ED25519_SIGNATURE_LENGTH ? buffer : null;
+}
 
 function decodeSignature(signature) {
   if (!signature || typeof signature !== 'string') {
@@ -78,24 +96,17 @@ function decodeSignature(signature) {
   }
 
   const trimmed = signature.trim();
+  const base64 = decodeCanonicalBase64(trimmed);
+  if (base64) return base64;
 
-  // Only accept base64 if it decodes to exactly 64 bytes (ed25519 signature length).
-  if (/^[A-Za-z0-9+/]*={0,2}$/.test(trimmed)) {
-    const buffer = Buffer.from(trimmed, 'base64');
-    if (buffer.length === ED25519_SIGNATURE_LENGTH) return buffer;
-  }
-
-  // Fall back to Base58 (also must be exactly 64 bytes).
-  let decoded;
   try {
-    decoded = decodeBase58(trimmed);
+    const decoded = decodeBase58(trimmed);
+    if (decoded.length === ED25519_SIGNATURE_LENGTH) return decoded;
   } catch (_) {
-    throw new Error('AUTH_SIGNATURE_INVALID');
+    // fall through
   }
-  if (decoded.length !== ED25519_SIGNATURE_LENGTH) {
-    throw new Error('AUTH_SIGNATURE_INVALID');
-  }
-  return decoded;
+
+  throw new Error('AUTH_SIGNATURE_INVALID');
 }
 
 module.exports = {
