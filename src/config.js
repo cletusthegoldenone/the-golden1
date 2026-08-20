@@ -55,6 +55,8 @@ const RUGCHECK_API_URL_TEMPLATE = process.env.RUGCHECK_API_URL_TEMPLATE || 'http
 const RUGCHECK_API_KEY = process.env.RUGCHECK_API_KEY || '';
 const RUGCHECK_TIMEOUT_MS = numberFromEnv(process.env.RUGCHECK_TIMEOUT_MS, 5000);
 const RUGCHECK_HIGH_RISK_LEVELS = listFromEnv(process.env.RUGCHECK_HIGH_RISK_LEVELS, ['high', 'critical', 'danger', 'dangerous', 'scam']);
+const JUPITER_TIMEOUT_MS = numberFromEnv(process.env.JUPITER_TIMEOUT_MS, 10000);
+const SOLANA_RPC_TIMEOUT_MS = numberFromEnv(process.env.SOLANA_RPC_TIMEOUT_MS, 10000);
 
 const PERSISTENCE_FILE_PATH = process.env.PERSISTENCE_FILE_PATH || './data/the-golden1-state.json';
 const PERSISTENCE_ADAPTER = process.env.PERSISTENCE_ADAPTER || 'file';
@@ -116,6 +118,8 @@ module.exports = {
   RUGCHECK_API_KEY,
   RUGCHECK_TIMEOUT_MS,
   RUGCHECK_HIGH_RISK_LEVELS,
+  JUPITER_TIMEOUT_MS,
+  SOLANA_RPC_TIMEOUT_MS,
   RUNTIME_ENV,
   IS_PRODUCTION,
   PERSISTENCE_FILE_PATH,

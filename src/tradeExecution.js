@@ -7,7 +7,9 @@ const {
   RUGCHECK_HIGH_RISK_LEVELS,
   JUPITER_QUOTE_API_URL,
   JUPITER_SWAP_API_URL,
-  SOLANA_RPC_URL
+  JUPITER_TIMEOUT_MS,
+  SOLANA_RPC_URL,
+  SOLANA_RPC_TIMEOUT_MS
 } = require('./config');
 const { state, saveState } = require('./store');
 
@@ -180,7 +182,7 @@ async function getJupiterQuote({ inputMint, outputMint, amount, slippageBps, req
     {
       headers: { Accept: 'application/json', 'X-Request-Id': requestId }
     },
-    { timeoutMs: RUGCHECK_TIMEOUT_MS, reasonCode: 'JUPITER_QUOTE_FAILED' }
+    { timeoutMs: JUPITER_TIMEOUT_MS, reasonCode: 'JUPITER_QUOTE_FAILED' }
   );
 }
 
@@ -200,7 +202,7 @@ async function getJupiterSwap({ quoteResponse, userPublicKey, requestId }) {
         wrapAndUnwrapSol: true
       })
     },
-    { timeoutMs: RUGCHECK_TIMEOUT_MS, reasonCode: 'JUPITER_SWAP_FAILED' }
+    { timeoutMs: JUPITER_TIMEOUT_MS, reasonCode: 'JUPITER_SWAP_FAILED' }
   );
 }
 
@@ -225,7 +227,7 @@ async function submitSignedTransaction({ signedTransaction, requestId }) {
         params: [signedTransaction, { encoding: 'base64', skipPreflight: false }]
       })
     },
-    { timeoutMs: RUGCHECK_TIMEOUT_MS, reasonCode: 'SOLANA_TX_FAILED' }
+    { timeoutMs: SOLANA_RPC_TIMEOUT_MS, reasonCode: 'SOLANA_TX_FAILED' }
   );
 
   if (payload.error) {

@@ -107,19 +107,19 @@ function createBootstrapProvider() {
 function createAuthProvider() {
   if (AUTH_PROVIDER === 'wallet_challenge') return createWalletChallengeProvider();
   if (AUTH_PROVIDER === 'bootstrap') {
-   if (IS_PRODUCTION) {
-     return {
-       name: 'bootstrap_disabled',
-       beginAuth() {
-         throw new AuthProviderError('AUTH_BOOTSTRAP_DISABLED', 403);
-       },
-       completeAuth() {
-         throw new AuthProviderError('AUTH_BOOTSTRAP_DISABLED', 403);
-       },
-       health: () => ({ ok: false, provider: 'bootstrap', reasonCode: 'AUTH_BOOTSTRAP_DISABLED' })
-     };
-   }
-   return createBootstrapProvider();
+    if (IS_PRODUCTION) {
+      return {
+        name: 'bootstrap_disabled',
+        beginAuth() {
+          throw new AuthProviderError('AUTH_BOOTSTRAP_DISABLED', 403);
+        },
+        completeAuth() {
+          throw new AuthProviderError('AUTH_BOOTSTRAP_DISABLED', 403);
+        },
+        health: () => ({ ok: false, provider: 'bootstrap', reasonCode: 'AUTH_BOOTSTRAP_DISABLED' })
+      };
+    }
+    return createBootstrapProvider();
   }
 
   return {

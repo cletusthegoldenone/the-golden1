@@ -294,12 +294,15 @@ function createApp() {
         const authHealth = authProvider.health();
         const persistence = persistenceHealth();
         const ready = runtimeConfigErrors.length === 0 && authHealth.ok && persistence.ok;
+        const rpcConfigErrors = runtimeConfigErrors.filter(
+          (entry) => entry.includes('HELIUS') || entry.includes('SOLANA_RPC')
+        );
         return json(res, ready ? 200 : 503, {
           ok: ready,
           auth: authHealth,
           persistence,
           rpc: {
-            ok: !!SOLANA_RPC_URL,
+            ok: rpcConfigErrors.length === 0,
             provider: HELIUS_API_KEY ? 'helius' : 'custom',
             configured: !!SOLANA_RPC_URL
           },
