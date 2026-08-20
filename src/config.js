@@ -21,6 +21,7 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'dev-session-secret-change-
 const SESSION_TTL_SECONDS = numberFromEnv(process.env.SESSION_TTL_SECONDS, 3600);
 const AUTH_BOOTSTRAP_TOKEN = process.env.AUTH_BOOTSTRAP_TOKEN || 'dev-bootstrap-token-change-me';
 const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME || 'tg1_session';
+const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
 
 const PERSISTENCE_FILE_PATH = process.env.PERSISTENCE_FILE_PATH || './data/the-golden1-state.json';
 
@@ -30,6 +31,9 @@ const RATE_LIMIT_PROTECTED_WINDOW_MS = numberFromEnv(process.env.RATE_LIMIT_PROT
 const RATE_LIMIT_PROTECTED_MAX = numberFromEnv(process.env.RATE_LIMIT_PROTECTED_MAX, 120);
 
 const MAX_BODY_BYTES = numberFromEnv(process.env.MAX_BODY_BYTES, 1024 * 1024);
+
+// Simple operator protection for kill-switch (replace with real role system later)
+const OPERATOR_TOKEN = process.env.OPERATOR_TOKEN || 'dev-operator-token-change-me';
 
 module.exports = {
   POLICY_VERSIONS,
@@ -43,10 +47,12 @@ module.exports = {
   SESSION_TTL_SECONDS,
   AUTH_BOOTSTRAP_TOKEN,
   SESSION_COOKIE_NAME,
+  COOKIE_SECURE,
   PERSISTENCE_FILE_PATH,
   RATE_LIMIT_PUBLIC_WINDOW_MS,
   RATE_LIMIT_PUBLIC_MAX,
   RATE_LIMIT_PROTECTED_WINDOW_MS,
   RATE_LIMIT_PROTECTED_MAX,
-  MAX_BODY_BYTES
+  MAX_BODY_BYTES,
+  OPERATOR_TOKEN
 };

@@ -1,5 +1,10 @@
 const crypto = require('crypto');
-const { SESSION_SECRET, SESSION_TTL_SECONDS, SESSION_COOKIE_NAME } = require('./config');
+const {
+  SESSION_SECRET,
+  SESSION_TTL_SECONDS,
+  SESSION_COOKIE_NAME,
+  COOKIE_SECURE
+} = require('./config');
 
 function base64UrlEncode(value) {
   return Buffer.from(value)
@@ -94,7 +99,8 @@ function tokenFromRequest(req) {
 
 function sessionCookie(token) {
   const maxAge = Math.max(1, Math.floor(SESSION_TTL_SECONDS));
-  return `${SESSION_COOKIE_NAME}=${token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${maxAge}`;
+  const secure = COOKIE_SECURE ? '; Secure' : '';
+  return `${SESSION_COOKIE_NAME}=${token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${maxAge}${secure}`;
 }
 
 module.exports = {
