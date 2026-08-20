@@ -136,7 +136,6 @@ function mockResponse(question) {
  * The `question` field is accepted as an alias for `message` for
  * backwards-compatibility.
  *
- * @param {import('http').IncomingMessage} _req  (already parsed)
  * @param {object} body  Parsed JSON body
  * @returns {Promise<{ status: number, payload: object }>}
  */
@@ -150,8 +149,12 @@ async function handleChat(body) {
 
   const rawHistory = Array.isArray(body.history) ? body.history : [];
 
+  // Cap history to the most recent 20 turns to limit token usage.
+  const MAX_HISTORY_TURNS = 20;
+  const trimmedHistory = rawHistory.slice(-MAX_HISTORY_TURNS);
+
   // Convert client history format → Gemini conversation format
-  const history = rawHistory
+  const history = trimmedHistory
     .filter((m) => m.role === 'user' || m.role === 'assistant')
     .map((m) => ({
       role: m.role === 'assistant' ? 'model' : 'user',
@@ -164,7 +167,9 @@ async function handleChat(body) {
   try {
     answer = await callGeminiAPI(message, history);
     usedLiveAI = true;
-  } catch (_err) {
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[chat] Gemini API unavailable, falling back to mock:', err.message);
     answer = mockResponse(message);
   }
 
