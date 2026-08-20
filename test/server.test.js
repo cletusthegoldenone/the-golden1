@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 
@@ -57,6 +58,11 @@ function setupEnv(overrides = {}) {
   process.env.RATE_LIMIT_PUBLIC_WINDOW_MS = overrides.RATE_LIMIT_PUBLIC_WINDOW_MS || '60000';
   process.env.RATE_LIMIT_PROTECTED_MAX = overrides.RATE_LIMIT_PROTECTED_MAX || '1000';
   process.env.RATE_LIMIT_PROTECTED_WINDOW_MS = overrides.RATE_LIMIT_PROTECTED_WINDOW_MS || '60000';
+  process.env.RATE_LIMIT_AUTH_MAX = overrides.RATE_LIMIT_AUTH_MAX || '10';
+  process.env.RATE_LIMIT_AUTH_WINDOW_MS = overrides.RATE_LIMIT_AUTH_WINDOW_MS || '900000';
+  process.env.MAX_TRADE_AMOUNT = overrides.MAX_TRADE_AMOUNT || '1000000000000';
+  process.env.MAX_TRADE_SIZE_USD = overrides.MAX_TRADE_SIZE_USD || '1000000';
+  process.env.CORS_ALLOWED_ORIGINS = overrides.CORS_ALLOWED_ORIGINS || '';
 }
 
 function loadApp(overrides = {}) {
@@ -81,11 +87,47 @@ async function startServer(createApp) {
   };
 }
 
+async function closeServerHandle(handle) {
+  await new Promise((resolve) => handle.close(resolve));
+}
+
+async function stopServer(server) {
+  await closeServerHandle(server.app);
+}
+
 async function postJson(url, body, headers = {}) {
   return fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body)
+  });
+}
+
+async function requestServer(server, { method = 'GET', path: requestPath = '/', headers = {}, body = null } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: server.app.address().port,
+        method,
+        path: requestPath,
+        headers
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString('utf8')
+          });
+        });
+      }
+    );
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
   });
 }
 
@@ -201,9 +243,23 @@ test('protected routes require validated auth session and reject spoofed identit
     assert.equal(mismatchRes.status, 403);
     assert.equal((await mismatchRes.json()).reasonCode, 'AUTH_IDENTITY_MISMATCH');
   } finally {
-    app.close();
+    await closeServerHandle(app);
     fs.rmSync(persistencePath, { force: true });
   }
+});
+
+test('decodeSignature accepts canonical base64 and base58 and rejects malformed inputs', () => {
+  clearAppModules();
+  const { decodeSignature } = require('../src/solanaWallet');
+  const bytes = Buffer.from(Array.from({ length: 64 }, (_, index) => index));
+  const base64 = bytes.toString('base64');
+  const base58 = base58Encode(bytes);
+
+  assert.deepEqual(decodeSignature(base64), bytes);
+  assert.deepEqual(decodeSignature(base58), bytes);
+  assert.throws(() => decodeSignature(`${base64.slice(0, -1)}!`), /AUTH_SIGNATURE_INVALID/);
+  assert.throws(() => decodeSignature('Zm9v'), /AUTH_SIGNATURE_INVALID/);
+  assert.throws(() => decodeSignature(`${base64.slice(0, -2)}AA`), /AUTH_SIGNATURE_INVALID/);
 });
 
 test('file-backed persistence survives restart for consent, onboarding, wallet state, and operator flags', async () => {
@@ -235,7 +291,7 @@ test('file-backed persistence survives restart for consent, onboarding, wallet s
     );
     assert.equal(killSwitchRes.status, 200);
   } finally {
-    server1.app.close();
+    await stopServer(server1);
   }
 
   const second = loadApp({ PERSISTENCE_FILE_PATH: persistencePath, OPERATOR_AUTH_TOKEN: 'durability-operator' });
@@ -266,7 +322,7 @@ test('file-backed persistence survives restart for consent, onboarding, wallet s
     const tradePayload = await tradeRes.json();
     assert.equal(tradePayload.reasonCode, 'GLOBAL_KILL_SWITCH_ACTIVE');
   } finally {
-    server2.app.close();
+    await stopServer(server2);
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -294,7 +350,7 @@ test('rate limiting returns deterministic 429 payloads for public and protected 
     assert.equal(payload.reasonCode, 'RATE_LIMIT_EXCEEDED');
     assert.equal(payload.scope, 'public');
   } finally {
-    publicServer.app.close();
+    await stopServer(publicServer);
     fs.rmSync(publicPersistencePath, { force: true });
   }
 
@@ -327,8 +383,51 @@ test('rate limiting returns deterministic 429 payloads for public and protected 
     assert.equal(protectedPayload.reasonCode, 'RATE_LIMIT_EXCEEDED');
     assert.equal(protectedPayload.scope, 'protected');
   } finally {
-    protectedServer.app.close();
+    await stopServer(protectedServer);
     fs.rmSync(protectedPersistencePath, { force: true });
+  }
+});
+
+test('auth rate limiting normalizes forwarded IP chains', async () => {
+  const persistencePath = dataFilePath('auth-rate-limit');
+  const { createApp, resetState } = loadApp({
+    PERSISTENCE_FILE_PATH: persistencePath,
+    AUTH_PROVIDER: 'wallet_challenge',
+    RATE_LIMIT_PUBLIC_MAX: '1000',
+    RATE_LIMIT_AUTH_MAX: '2',
+    RATE_LIMIT_AUTH_WINDOW_MS: '60000'
+  });
+  resetState();
+  const server = await startServer(createApp);
+  const wallet = createWalletSigner();
+
+  try {
+    const first = await postJson(
+      `${server.baseUrl}/api/auth/challenge`,
+      { walletPublicKey: wallet.publicKeyBase58 },
+      { 'x-forwarded-for': '203.0.113.4, 10.0.0.1' }
+    );
+    assert.equal(first.status, 200);
+
+    const second = await postJson(
+      `${server.baseUrl}/api/auth/challenge`,
+      { walletPublicKey: wallet.publicKeyBase58 },
+      { 'x-forwarded-for': '203.0.113.4, 10.0.0.2' }
+    );
+    assert.equal(second.status, 200);
+
+    const third = await postJson(
+      `${server.baseUrl}/api/auth/challenge`,
+      { walletPublicKey: wallet.publicKeyBase58 },
+      { 'x-forwarded-for': '203.0.113.4, 10.0.0.3' }
+    );
+    assert.equal(third.status, 429);
+    const payload = await third.json();
+    assert.equal(payload.reasonCode, 'RATE_LIMIT_EXCEEDED');
+    assert.equal(payload.scope, 'auth');
+  } finally {
+    await stopServer(server);
+    fs.rmSync(persistencePath, { force: true });
   }
 });
 
@@ -383,7 +482,48 @@ test('policy and delegation reason codes remain unchanged with stronger auth/ses
     );
     assert.equal((await tradeRes.json()).reasonCode, 'TRIAL_ENDED_STAKE_REQUIRED');
   } finally {
-    app.close();
+    await closeServerHandle(app);
+    fs.rmSync(persistencePath, { force: true });
+  }
+});
+
+test('trade input upper bounds reject oversized requests before execution', async () => {
+  const persistencePath = dataFilePath('trade-input-bounds');
+  const { createApp, resetState } = loadApp({
+    PERSISTENCE_FILE_PATH: persistencePath,
+    MAX_TRADE_AMOUNT: '100',
+    MAX_TRADE_SIZE_USD: '50'
+  });
+  resetState();
+  const { app, baseUrl } = await startServer(createApp);
+
+  try {
+    await bootstrapUser(baseUrl, 'u-bounds');
+    const authLogin = await login(baseUrl, 'u-bounds');
+    assert.equal(authLogin.res.status, 200);
+
+    const oversizedCheck = await postJson(
+      `${baseUrl}/api/trade/check`,
+      { pair: 'SOL/USDC', tradeSizeUsd: 51 },
+      { cookie: authLogin.cookie }
+    );
+    assert.equal(oversizedCheck.status, 400);
+    assert.equal((await oversizedCheck.json()).reasonCode, 'TRADE_SIZE_EXCEEDS_MAXIMUM');
+
+    const oversizedExecute = await postJson(
+      `${baseUrl}/api/protected/trade/execute`,
+      {
+        inputMint: 'So11111111111111111111111111111111111111112',
+        outputMint: 'USD1111111111111111111111111111111111111111',
+        amount: 101,
+        tradeSizeUsd: 10
+      },
+      { cookie: authLogin.cookie }
+    );
+    assert.equal(oversizedExecute.status, 400);
+    assert.equal((await oversizedExecute.json()).reasonCode, 'AMOUNT_EXCEEDS_MAXIMUM');
+  } finally {
+    await closeServerHandle(app);
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -439,7 +579,7 @@ test('wallet challenge auth supports success, invalid signature, replay protecti
     const statusRes = await fetch(`${baseUrl}/api/protected/onboarding/status`, { headers: { cookie } });
     assert.equal(statusRes.status, 200);
   } finally {
-    app.close();
+    await closeServerHandle(app);
     fs.rmSync(persistencePath, { force: true });
   }
 
@@ -466,7 +606,7 @@ test('wallet challenge auth supports success, invalid signature, replay protecti
     assert.equal(loginRes.status, 401);
     assert.equal((await loginRes.json()).reasonCode, 'AUTH_CHALLENGE_EXPIRED');
   } finally {
-    expiryServer.app.close();
+    await stopServer(expiryServer);
     fs.rmSync(expiryPath, { force: true });
   }
 });
@@ -511,7 +651,7 @@ test('kill switch requires operator authorization and persists audit metadata', 
       ]
     );
   } finally {
-    app.close();
+    await closeServerHandle(app);
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -574,8 +714,8 @@ test('rugcheck high-risk block prevents Jupiter execution and records blocked at
     assert.equal(txs[0].requestId, 'risk-block-1');
     assert.equal(txs[0].riskDecisions[0].riskLevel, 'high');
   } finally {
-    app.close();
-    upstream.app.close();
+    await closeServerHandle(app);
+    await closeServerHandle(upstream.app);
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -629,7 +769,78 @@ test('production cookie security and TLS-aware auth safeguards are enforced', as
     assert.match(cookie, /HttpOnly/);
     assert.match(cookie, /SameSite=Strict/);
   } finally {
-    app.close();
+    await closeServerHandle(app);
+    fs.rmSync(persistencePath, { force: true });
+  }
+});
+
+test('CORS preflight allowlisting and HTTPS redirects behave as expected', async () => {
+  const persistencePath = dataFilePath('cors-and-redirect');
+  const { createApp, resetState } = loadApp({
+    PERSISTENCE_FILE_PATH: persistencePath,
+    CORS_ALLOWED_ORIGINS: 'https://app.example.com',
+    TRUST_PROXY: 'true'
+  });
+  resetState();
+  const server = await startServer(createApp);
+
+  try {
+    const preflightAllowed = await requestServer(server, {
+      method: 'OPTIONS',
+      path: '/api/auth/challenge',
+      headers: {
+        Origin: 'https://app.example.com',
+        'Access-Control-Request-Method': 'POST'
+      }
+    });
+    assert.equal(preflightAllowed.status, 204);
+    assert.equal(preflightAllowed.headers['access-control-allow-origin'], 'https://app.example.com');
+    assert.match(preflightAllowed.headers['access-control-allow-methods'], /POST/);
+    assert.equal(preflightAllowed.headers.vary, 'Origin');
+
+    const preflightBlocked = await requestServer(server, {
+      method: 'OPTIONS',
+      path: '/api/auth/challenge',
+      headers: {
+        Origin: 'https://evil.example.com',
+        'Access-Control-Request-Method': 'POST'
+      }
+    });
+    assert.equal(preflightBlocked.status, 204);
+    assert.equal(preflightBlocked.headers['access-control-allow-origin'], undefined);
+
+    const redirect = await requestServer(server, {
+      method: 'GET',
+      path: '/healthz?check=1',
+      headers: {
+        Host: 'app.example.com',
+        'X-Forwarded-Proto': 'http'
+      }
+    });
+    assert.equal(redirect.status, 301);
+    assert.equal(redirect.headers.location, 'https://app.example.com/healthz?check=1');
+
+    const disallowedRedirect = await requestServer(server, {
+      method: 'GET',
+      path: '/healthz',
+      headers: {
+        Host: 'evil.example.com',
+        'X-Forwarded-Proto': 'http'
+      }
+    });
+    assert.equal(disallowedRedirect.status, 200);
+
+    const localhostNoRedirect = await requestServer(server, {
+      method: 'GET',
+      path: '/healthz',
+      headers: {
+        Host: '127.0.0.1',
+        'X-Forwarded-Proto': 'http'
+      }
+    });
+    assert.equal(localhostNoRedirect.status, 200);
+  } finally {
+    await stopServer(server);
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -654,7 +865,7 @@ test('readiness and deterministic persistence failures are exposed for managed a
     assert.equal(accept.status, 500);
     assert.equal((await accept.json()).reasonCode, 'PERSISTENCE_CONFIG_INVALID');
   } finally {
-    app.close();
+    await closeServerHandle(app);
     fs.rmSync(persistencePath, { force: true });
   }
 });
