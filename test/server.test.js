@@ -87,6 +87,10 @@ async function startServer(createApp) {
   };
 }
 
+async function stopServer(server) {
+  await new Promise((resolve) => server.app.close(resolve));
+}
+
 async function postJson(url, body, headers = {}) {
   return fetch(url, {
     method: 'POST',
@@ -418,7 +422,7 @@ test('auth rate limiting normalizes forwarded IP chains', async () => {
     assert.equal(payload.reasonCode, 'RATE_LIMIT_EXCEEDED');
     assert.equal(payload.scope, 'auth');
   } finally {
-    server.app.close();
+    await stopServer(server);
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -474,7 +478,7 @@ test('policy and delegation reason codes remain unchanged with stronger auth/ses
     );
     assert.equal((await tradeRes.json()).reasonCode, 'TRIAL_ENDED_STAKE_REQUIRED');
   } finally {
-    app.close();
+    await new Promise((resolve) => app.close(resolve));
     fs.rmSync(persistencePath, { force: true });
   }
 });
@@ -832,7 +836,7 @@ test('CORS preflight allowlisting and HTTPS redirects behave as expected', async
     });
     assert.equal(localhostNoRedirect.status, 200);
   } finally {
-    server.app.close();
+    await stopServer(server);
     fs.rmSync(persistencePath, { force: true });
   }
 });
