@@ -56,7 +56,7 @@ function createWalletChallengeProvider(options = {}) {
     } catch (error) {
       throw new AuthProviderError(error.message, error.message === 'AUTH_WALLET_PUBLIC_KEY_REQUIRED' ? 400 : 401);
     }
-    if (entry.wallet.normalized !== wallet.normalized) throw new AuthProviderError('AUTH_CHALLENGE_INVALID');
+    if (!entry.wallet.rawPublicKey.equals(wallet.rawPublicKey)) throw new AuthProviderError('AUTH_CHALLENGE_INVALID');
 
     let signatureBuffer;
     try {
@@ -75,7 +75,7 @@ function createWalletChallengeProvider(options = {}) {
 
     entry.used = true;
     return {
-      identity: walletIdentity(walletInput),
+      identity: `wallet:${crypto.createHash('sha256').update(wallet.rawPublicKey).digest('hex').slice(0, 32)}`,
       subject: wallet.normalized
     };
   }

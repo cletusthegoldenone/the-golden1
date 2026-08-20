@@ -568,6 +568,15 @@ test('wallet challenge auth supports success, invalid signature, replay protecti
     const cookie = loginRes.headers.get('set-cookie');
     assert.ok(cookie);
 
+    const thirdChallengeRes = await postJson(`${baseUrl}/api/auth/challenge`, { walletPublicKey: wallet.publicKeyBase58 });
+    const thirdChallenge = (await thirdChallengeRes.json()).challenge;
+    const pemLoginRes = await postJson(`${baseUrl}/api/session/login`, {
+      walletPublicKeyPem: wallet.publicKeyPem,
+      challengeId: thirdChallenge.challengeId,
+      signature: wallet.sign(thirdChallenge.message)
+    });
+    assert.equal(pemLoginRes.status, 200);
+
     const replayRes = await postJson(`${baseUrl}/api/session/login`, {
       walletPublicKey: wallet.publicKeyBase58,
       challengeId: secondChallenge.challengeId,
@@ -768,6 +777,34 @@ test('production cookie security and TLS-aware auth safeguards are enforced', as
     assert.match(cookie, /Secure/);
     assert.match(cookie, /HttpOnly/);
     assert.match(cookie, /SameSite=Strict/);
+  } finally {
+    await closeServerHandle(app);
+    fs.rmSync(persistencePath, { force: true });
+  }
+});
+
+test('production readiness accepts an explicit custom Solana RPC without a Helius API key', async () => {
+  const persistencePath = dataFilePath('prod-custom-rpc');
+  const appModules = loadApp({
+    PERSISTENCE_FILE_PATH: persistencePath,
+    AUTH_PROVIDER: 'wallet_challenge',
+    NODE_ENV: 'production',
+    SESSION_COOKIE_SECURE: 'true',
+    AUTH_REQUIRE_SECURE_TRANSPORT: 'true',
+    TRUST_PROXY: 'true',
+    SOLANA_RPC_URL: 'https://rpc.example.test',
+    OPERATOR_AUTH_TOKEN: 'test-operator-token'
+  });
+  appModules.resetState();
+  const { app, baseUrl } = await startServer(appModules.createApp);
+
+  try {
+    const ready = await fetch(`${baseUrl}/readyz`);
+    assert.equal(ready.status, 200);
+    const payload = await ready.json();
+    assert.deepEqual(payload.configErrors, []);
+    assert.equal(payload.rpc.provider, 'custom');
+    assert.equal(payload.rpc.configured, true);
   } finally {
     await closeServerHandle(app);
     fs.rmSync(persistencePath, { force: true });

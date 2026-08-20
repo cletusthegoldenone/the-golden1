@@ -85,8 +85,10 @@ function productionConfigErrors() {
   if (AUTH_PROVIDER === 'wallet_challenge' && SESSION_TTL_SECONDS < 300) {
     errors.push('SESSION_TTL_TOO_SHORT_FOR_PRODUCTION');
   }
-  if (!HELIUS_API_KEY) errors.push('HELIUS_API_KEY_REQUIRED_IN_PRODUCTION');
-  if (!SOLANA_RPC_URL) errors.push('SOLANA_RPC_URL_REQUIRED_IN_PRODUCTION');
+  if (!SOLANA_RPC_URL) {
+    errors.push('SOLANA_RPC_URL_REQUIRED_IN_PRODUCTION');
+    errors.push('HELIUS_API_KEY_REQUIRED_IN_PRODUCTION');
+  }
   if (!OPERATOR_AUTH_TOKEN && OPERATOR_IDENTITIES.length === 0) {
     errors.push('OPERATOR_AUTH_REQUIRED_IN_PRODUCTION');
   }
