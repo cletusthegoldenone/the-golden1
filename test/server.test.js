@@ -812,6 +812,16 @@ test('CORS preflight allowlisting and HTTPS redirects behave as expected', async
     assert.equal(redirect.status, 301);
     assert.equal(redirect.headers.location, 'https://app.example.com/healthz?check=1');
 
+    const disallowedRedirect = await requestServer(server, {
+      method: 'GET',
+      path: '/healthz',
+      headers: {
+        Host: 'evil.example.com',
+        'X-Forwarded-Proto': 'http'
+      }
+    });
+    assert.equal(disallowedRedirect.status, 200);
+
     const localhostNoRedirect = await requestServer(server, {
       method: 'GET',
       path: '/healthz',

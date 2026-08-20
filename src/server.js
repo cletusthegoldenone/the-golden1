@@ -50,6 +50,17 @@ const ALLOWED_ORIGINS_SET = new Set(
     .map((origin) => origin.trim())
     .filter(Boolean)
 );
+const REDIRECT_HOSTS_SET = new Set(
+  [...ALLOWED_ORIGINS_SET]
+    .map((origin) => {
+      try {
+        return new URL(origin).host.toLowerCase();
+      } catch (_) {
+        return null;
+      }
+    })
+    .filter(Boolean)
+);
 
 function securityHeaders() {
   return {
@@ -283,6 +294,14 @@ function hostIsLoopback(host) {
   }
 }
 
+function redirectHostFromRequest(req) {
+  const host = typeof req.headers.host === 'string' ? req.headers.host.trim().toLowerCase() : '';
+  if (!host || hostIsLoopback(host) || REDIRECT_HOSTS_SET.size === 0 || !REDIRECT_HOSTS_SET.has(host)) {
+    return null;
+  }
+  return host;
+}
+
 function authTransportGuard(req) {
   if (!AUTH_REQUIRE_SECURE_TRANSPORT) return null;
   if (requestIsSecure(req)) return null;
@@ -331,10 +350,11 @@ function createApp() {
         return;
       }
 
-      if (TRUST_PROXY && !requestIsSecure(req) && !hostIsLoopback(req.headers.host)) {
+      const redirectHost = redirectHostFromRequest(req);
+      if (TRUST_PROXY && redirectHost && !requestIsSecure(req)) {
         res.writeHead(301, {
           ...securityHeaders(),
-          Location: `https://${req.headers.host}${req.url}`
+          Location: `https://${redirectHost}${req.url}`
         });
         res.end();
         return;
