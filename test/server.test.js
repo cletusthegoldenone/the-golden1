@@ -251,7 +251,7 @@ test('decodeSignature accepts canonical base64 and base58 and rejects malformed 
   assert.deepEqual(decodeSignature(base58), bytes);
   assert.throws(() => decodeSignature(`${base64.slice(0, -1)}!`), /AUTH_SIGNATURE_INVALID/);
   assert.throws(() => decodeSignature('Zm9v'), /AUTH_SIGNATURE_INVALID/);
-  assert.throws(() => decodeSignature(base64.replace(/=+$/, '')), /AUTH_SIGNATURE_INVALID/);
+  assert.throws(() => decodeSignature(`${base64.slice(0, -2)}AA`), /AUTH_SIGNATURE_INVALID/);
 });
 
 test('file-backed persistence survives restart for consent, onboarding, wallet state, and operator flags', async () => {

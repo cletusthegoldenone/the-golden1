@@ -87,8 +87,7 @@ function walletIdentity(walletInput) {
 function decodeCanonicalBase64(value) {
   if (!STRICT_BASE64_RE.test(value)) return null;
   const buffer = Buffer.from(value, 'base64');
-  if (buffer.length !== ED25519_SIGNATURE_LENGTH) return null;
-  return buffer.toString('base64') === value ? buffer : null;
+  return buffer.length === ED25519_SIGNATURE_LENGTH ? buffer : null;
 }
 
 function decodeSignature(signature) {
