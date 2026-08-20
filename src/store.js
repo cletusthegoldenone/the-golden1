@@ -1,7 +1,14 @@
-const { createFilePersistence } = require('./persistence');
-const { PERSISTENCE_FILE_PATH } = require('./config');
+const { createFilePersistence, createPostgresPersistence, PersistenceError } = require('./persistence');
+const { PERSISTENCE_ADAPTER, PERSISTENCE_FILE_PATH, DATABASE_URL } = require('./config');
 
-const persistence = createFilePersistence(PERSISTENCE_FILE_PATH);
+function createPersistenceAdapter() {
+  if (PERSISTENCE_ADAPTER === 'postgres') {
+    return createPostgresPersistence(DATABASE_URL);
+  }
+  return createFilePersistence(PERSISTENCE_FILE_PATH);
+}
+
+const persistence = createPersistenceAdapter();
 
 function defaultUser(identity) {
   return {
@@ -91,10 +98,22 @@ function toSnapshot(current) {
   };
 }
 
-const state = fromSnapshot(persistence.load());
+let bootPersistenceError = null;
+let initialSnapshot = null;
+try {
+  initialSnapshot = persistence.load();
+} catch (error) {
+  bootPersistenceError = error;
+}
+const state = fromSnapshot(initialSnapshot);
 
 function saveState() {
-  persistence.save(toSnapshot(state));
+  try {
+    persistence.save(toSnapshot(state));
+  } catch (error) {
+    const failure = error instanceof PersistenceError ? error : new PersistenceError('PERSISTENCE_WRITE_FAILED');
+    throw failure;
+  }
 }
 
 function getUser(identity) {
@@ -120,11 +139,24 @@ function resetState({ clearPersistence = true } = {}) {
   }
 }
 
+function persistenceHealth() {
+  if (bootPersistenceError && !persistence.health) {
+    return { ok: false, reasonCode: bootPersistenceError.reasonCode || 'PERSISTENCE_UNAVAILABLE' };
+  }
+  if (typeof persistence.health !== 'function') return { ok: true, adapter: 'unknown' };
+  const health = persistence.health();
+  if (bootPersistenceError && health.ok) {
+    return { ok: false, adapter: health.adapter, reasonCode: bootPersistenceError.reasonCode || 'PERSISTENCE_UNAVAILABLE' };
+  }
+  return health;
+}
+
 module.exports = {
   state,
   getUser,
   saveState,
   setTransactions,
   resetState,
-  persistence
+  persistence,
+  persistenceHealth
 };

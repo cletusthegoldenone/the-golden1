@@ -1,5 +1,13 @@
 const crypto = require('crypto');
-const { SESSION_SECRET, SESSION_TTL_SECONDS, SESSION_COOKIE_NAME } = require('./config');
+const {
+  SESSION_SECRET,
+  SESSION_TTL_SECONDS,
+  SESSION_COOKIE_NAME,
+  SESSION_COOKIE_PATH,
+  SESSION_COOKIE_DOMAIN,
+  SESSION_COOKIE_SAME_SITE,
+  SESSION_COOKIE_SECURE
+} = require('./config');
 
 function base64UrlEncode(value) {
   return Buffer.from(value)
@@ -94,12 +102,21 @@ function tokenFromRequest(req) {
 
 function sessionCookie(token) {
   const maxAge = Math.max(1, Math.floor(SESSION_TTL_SECONDS));
-  return `${SESSION_COOKIE_NAME}=${token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${maxAge}`;
+  const secure = SESSION_COOKIE_SECURE ? '; Secure' : '';
+  const domain = SESSION_COOKIE_DOMAIN ? `; Domain=${SESSION_COOKIE_DOMAIN}` : '';
+  return `${SESSION_COOKIE_NAME}=${token}; HttpOnly${secure}; Path=${SESSION_COOKIE_PATH}; SameSite=${SESSION_COOKIE_SAME_SITE}; Max-Age=${maxAge}${domain}`;
+}
+
+function clearSessionCookie() {
+  const secure = SESSION_COOKIE_SECURE ? '; Secure' : '';
+  const domain = SESSION_COOKIE_DOMAIN ? `; Domain=${SESSION_COOKIE_DOMAIN}` : '';
+  return `${SESSION_COOKIE_NAME}=; HttpOnly${secure}; Path=${SESSION_COOKIE_PATH}; SameSite=${SESSION_COOKIE_SAME_SITE}; Max-Age=0${domain}`;
 }
 
 module.exports = {
   createSessionToken,
   verifySessionToken,
   tokenFromRequest,
-  sessionCookie
+  sessionCookie,
+  clearSessionCookie
 };
