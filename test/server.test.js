@@ -26,6 +26,7 @@ function setupEnv(overrides = {}) {
   process.env.AUTH_BOOTSTRAP_TOKEN = overrides.AUTH_BOOTSTRAP_TOKEN || 'test-bootstrap-token';
   process.env.SESSION_TTL_SECONDS = overrides.SESSION_TTL_SECONDS || '3600';
   process.env.SESSION_COOKIE_NAME = overrides.SESSION_COOKIE_NAME || 'tg1_session';
+  process.env.OPERATOR_TOKEN = overrides.OPERATOR_TOKEN || 'test-operator-token';
   process.env.PERSISTENCE_FILE_PATH = overrides.PERSISTENCE_FILE_PATH;
   process.env.RATE_LIMIT_PUBLIC_MAX = overrides.RATE_LIMIT_PUBLIC_MAX || '1000';
   process.env.RATE_LIMIT_PUBLIC_WINDOW_MS = overrides.RATE_LIMIT_PUBLIC_WINDOW_MS || '60000';
@@ -157,7 +158,7 @@ test('file-backed persistence survives restart for consent, onboarding, wallet s
     const killSwitchRes = await postJson(
       `${server1.baseUrl}/api/protected/operator/kill-switch`,
       { enabled: true },
-      { cookie: authLogin.cookie }
+      { cookie: authLogin.cookie, 'x-operator-token': 'test-operator-token' }
     );
     assert.equal(killSwitchRes.status, 200);
   } finally {

@@ -1,7 +1,7 @@
 const http = require('http');
 const { URL } = require('url');
 const { recordConsent, hasAcceptedLatest, getConsentHistory } = require('./legal');
-const { getUser, state, saveState } = require('./store');
+const { getUser, state, saveState, setTransactions } = require('./store');
 const { evaluateTradeAuthorization } = require('./tradingAuth');
 const { toCsv, summarize, TAX_DISCLAIMER } = require('./taxCenter');
 const {
@@ -12,7 +12,8 @@ const {
   RATE_LIMIT_PROTECTED_MAX,
   RATE_LIMIT_PROTECTED_WINDOW_MS,
   SESSION_COOKIE_NAME,
-  SESSION_TTL_SECONDS
+  SESSION_TTL_SECONDS,
+  OPERATOR_TOKEN
 } = require('./config');
 const { createSessionToken, verifySessionToken, tokenFromRequest, sessionCookie } = require('./auth');
 const { RateLimiter } = require('./rateLimit');
@@ -87,9 +88,7 @@ function readBody(req) {
       }
     });
 
-    req.on('error', (err) => {
-      reject(err);
-    });
+    req.on('error', (err) => reject(err));
   });
 }
 
@@ -98,7 +97,11 @@ function identityFromLegacy(reqUrl, req) {
 }
 
 function isProtectedPath(pathname) {
-  return pathname.startsWith('/app') || pathname.startsWith('/api/protected') || pathname === '/api/trade/check';
+  return (
+    pathname.startsWith('/app') ||
+    pathname.startsWith('/api/protected') ||
+    pathname === '/api/trade/check'
+  );
 }
 
 const ONBOARDING_STEPS = [
@@ -127,7 +130,42 @@ function parseOptionalPositiveNumber(value) {
 }
 
 function legalGateHtml() {
-  return `<!doctype html><html><head><title>The Golden1 Legal Gate</title><style>body{margin:0;font-family:sans-serif;background:#fff;color:#111}main{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}section{max-width:720px}h1{font-size:2rem}</style></head><body><main><section><h1>Legal Acceptance Required</h1><p>You must accept Terms, Risk Disclaimer, Trading Authorization Disclosures, and Privacy Acknowledgement before app access.</p></section></main></body></html>`;
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>The Golden1 — Legal Acceptance Required</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #fff; color: #111; }
+    main { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 2rem; }
+    section { max-width: 720px; line-height: 1.5; }
+    h1 { font-size: 1.75rem; margin-bottom: 1rem; }
+    ul { margin: 1rem 0; }
+    .warning { background: #fff8e6; border: 1px solid #f0d78c; padding: 1rem; border-radius: 6px; margin-top: 1.5rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <h1>Legal Acceptance Required</h1>
+      <p>Before you can access The Golden1 (Cletus), you must explicitly accept:</p>
+      <ul>
+        <li>Terms of Service</li>
+        <li>Risk Disclaimer</li>
+        <li>Trading Authorization Disclosures</li>
+        <li>Privacy / Data handling acknowledgment</li>
+      </ul>
+      <p>Crypto and automated trading are high risk. You can lose all capital you put at risk. Past performance does not guarantee future results.</p>
+      <div class="warning">
+        <strong>Important:</strong> This software provides educational tooling only and does not provide legal, tax, or investment advice. Consult qualified professionals.
+      </div>
+      <p style="margin-top:1.5rem;font-size:0.9rem;color:#555;">
+        Use the API endpoint <code>POST /api/legal/accept</code> to record acceptance (see SETUP.md).
+      </p>
+    </section>
+  </main>
+</body>
+</html>`;
 }
 
 function verifyAuthContext(reqUrl, req) {
@@ -154,10 +192,7 @@ function verifyAuthContext(reqUrl, req) {
     };
   }
 
-  return {
-    ok: true,
-    identity: auth.identity
-  };
+  return { ok: true, identity: auth.identity };
 }
 
 function validateIdentity(value) {
@@ -171,6 +206,14 @@ function validateBootstrapToken(req) {
   }
   if (token !== AUTH_BOOTSTRAP_TOKEN) {
     return { ok: false, status: 401, body: { error: 'unauthorized', reasonCode: 'AUTH_BOOTSTRAP_INVALID' } };
+  }
+  return { ok: true };
+}
+
+function validateOperatorToken(req) {
+  const token = req.headers['x-operator-token'];
+  if (!token || token !== OPERATOR_TOKEN) {
+    return { ok: false, status: 403, body: { error: 'forbidden', reasonCode: 'OPERATOR_REQUIRED' } };
   }
   return { ok: true };
 }
@@ -196,6 +239,10 @@ function createApp() {
           return json(res, auth.status, auth.body);
         }
         identity = auth.identity;
+      }
+
+      if (req.method === 'GET' && reqUrl.pathname === '/healthz') {
+        return json(res, 200, { status: 'ok', service: 'the-golden1' });
       }
 
       if (req.method === 'GET' && reqUrl.pathname === '/legal') {
@@ -279,7 +326,9 @@ function createApp() {
           res,
           200,
           { ok: true },
-          { 'Set-Cookie': `${SESSION_COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0` }
+          {
+            'Set-Cookie': `${SESSION_COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0`
+          }
         );
       }
 
@@ -351,7 +400,11 @@ function createApp() {
         };
         user.onboarding.constraintsConfigured = true;
         saveState();
-        return json(res, 200, { ok: true, constraints: user.constraints, onboarding: onboardingStatus(user.onboarding) });
+        return json(res, 200, {
+          ok: true,
+          constraints: user.constraints,
+          onboarding: onboardingStatus(user.onboarding)
+        });
       }
 
       if (req.method === 'POST' && reqUrl.pathname === '/api/protected/onboarding/fund-or-link') {
@@ -389,8 +442,15 @@ function createApp() {
 
         const expectedGrossProfitUsd = Number(body?.expectedGrossProfitUsd ?? 0);
         const tradeSizeUsd = Number(body?.tradeSizeUsd ?? 0);
-        if (!Number.isFinite(expectedGrossProfitUsd) || expectedGrossProfitUsd < 0 || !Number.isFinite(tradeSizeUsd) || tradeSizeUsd < 0) {
-          return json(res, 400, { error: 'expectedGrossProfitUsd and tradeSizeUsd must be valid numbers' });
+        if (
+          !Number.isFinite(expectedGrossProfitUsd) ||
+          expectedGrossProfitUsd < 0 ||
+          !Number.isFinite(tradeSizeUsd) ||
+          tradeSizeUsd < 0
+        ) {
+          return json(res, 400, {
+            error: 'expectedGrossProfitUsd and tradeSizeUsd must be valid numbers'
+          });
         }
         const user = getUser(identity);
         const auth = evaluateTradeAuthorization(user, {
@@ -402,7 +462,46 @@ function createApp() {
         return json(res, auth.allowed ? 200 : 403, auth);
       }
 
+      if (req.method === 'POST' && reqUrl.pathname === '/api/protected/trades/record') {
+        const body = await readBody(req).catch((err) => err);
+        if (body instanceof Error) {
+          if (body.code === 'PAYLOAD_TOO_LARGE') return json(res, 413, { error: 'payload_too_large' });
+          return json(res, 400, { error: 'invalid_json' });
+        }
+
+        const required = ['timestamp', 'pair', 'side', 'quantity', 'priceUsd'];
+        for (const key of required) {
+          if (body[key] === undefined || body[key] === null || body[key] === '') {
+            return json(res, 400, { error: `${key} is required` });
+          }
+        }
+
+        const user = getUser(identity);
+        const existing = state.transactions.get(user.id) || [];
+        const record = {
+          timestamp: body.timestamp,
+          pair: body.pair,
+          side: body.side,
+          quantity: Number(body.quantity),
+          priceUsd: Number(body.priceUsd),
+          realizedPnlUsd: Number(body.realizedPnlUsd || 0),
+          unrealizedPnlUsd: Number(body.unrealizedPnlUsd || 0)
+        };
+        existing.push(record);
+        setTransactions(user.id, existing);
+
+        if (record.realizedPnlUsd > 0) {
+          user.monthlyGrossProfitUsd = (user.monthlyGrossProfitUsd || 0) + record.realizedPnlUsd;
+          saveState();
+        }
+
+        return json(res, 200, { ok: true, recorded: record });
+      }
+
       if (req.method === 'POST' && reqUrl.pathname === '/api/protected/operator/kill-switch') {
+        const op = validateOperatorToken(req);
+        if (!op.ok) return json(res, op.status, op.body);
+
         const body = await readBody(req).catch((err) => err);
         if (body instanceof Error) {
           if (body.code === 'PAYLOAD_TOO_LARGE') return json(res, 413, { error: 'payload_too_large' });
