@@ -19,6 +19,11 @@ const {
   RATE_LIMIT_PUBLIC_WINDOW_MS,
   RATE_LIMIT_PROTECTED_MAX,
   RATE_LIMIT_PROTECTED_WINDOW_MS,
+  RATE_LIMIT_AUTH_MAX,
+  RATE_LIMIT_AUTH_WINDOW_MS,
+  MAX_TRADE_AMOUNT,
+  MAX_TRADE_SIZE_USD,
+  CORS_ALLOWED_ORIGINS,
   SESSION_TTL_SECONDS
 } = require('./config');
 const { createSessionToken, verifySessionToken, tokenFromRequest, sessionCookie, clearSessionCookie } = require('./auth');
@@ -36,6 +41,7 @@ const {
 } = require('./tradeExecution');
 
 const limiter = new RateLimiter();
+const authLimiter = new RateLimiter();
 const authProvider = createAuthProvider();
 const runtimeConfigErrors = productionConfigErrors();
 
@@ -45,6 +51,23 @@ function securityHeaders() {
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+  };
+}
+
+const ALLOWED_ORIGINS_SET = CORS_ALLOWED_ORIGINS
+  ? new Set(CORS_ALLOWED_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean))
+  : new Set();
+
+function corsHeaders(req) {
+  const origin = req.headers['origin'];
+  if (!origin || ALLOWED_ORIGINS_SET.size === 0) return {};
+  if (!ALLOWED_ORIGINS_SET.has(origin)) return {};
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Request-Id, X-Bootstrap-Token',
+    'Access-Control-Allow-Credentials': 'true',
+    'Vary': 'Origin'
   };
 }
 
@@ -199,10 +222,13 @@ function identityFromBody(body) {
   return null;
 }
 
+const SAFE_REQUEST_ID_RE = /^[A-Za-z0-9\-_.]{1,128}$/;
+
 function requestIdFromRequest(req) {
   const header = req.headers['x-request-id'] || req.headers['x-correlation-id'];
-  if (typeof header === 'string' && header.trim()) {
-    return header.trim().slice(0, 128);
+  if (typeof header === 'string') {
+    const trimmed = header.trim();
+    if (SAFE_REQUEST_ID_RE.test(trimmed)) return trimmed;
   }
   return crypto.randomUUID();
 }
@@ -262,6 +288,31 @@ function createApp() {
       const reqUrl = new URL(req.url, 'http://localhost');
       const requestId = requestIdFromRequest(req);
       res.setHeader('X-Request-Id', requestId);
+
+      // Apply CORS headers to every response for matching origins.
+      const cors = corsHeaders(req);
+      for (const [header, value] of Object.entries(cors)) {
+        res.setHeader(header, value);
+      }
+
+      // Handle CORS pre-flight before rate limiting or auth.
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, { ...securityHeaders(), ...cors });
+        res.end();
+        return;
+      }
+
+      // Enforce HTTPS redirect in production when the request arrived over HTTP.
+      if (TRUST_PROXY && !requestIsSecure(req)) {
+        const host = req.headers['host'];
+        if (host && host !== 'localhost' && !host.startsWith('localhost:') && !host.startsWith('127.') && !host.startsWith('[::1]')) {
+          const redirectUrl = `https://${host}${req.url}`;
+          res.writeHead(301, { ...securityHeaders(), Location: redirectUrl });
+          res.end();
+          return;
+        }
+      }
+
       const isProtected = isProtectedPath(reqUrl.pathname);
       const sourceIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
       const scope = isProtected ? 'protected' : 'public';
@@ -353,6 +404,11 @@ function createApp() {
         const authTransportFailure = authTransportGuard(req);
         if (authTransportFailure) return json(res, authTransportFailure.status, authTransportFailure.body);
 
+        const authRate = authLimiter.consume({ key: `auth:${sourceIp}`, limit: RATE_LIMIT_AUTH_MAX, windowMs: RATE_LIMIT_AUTH_WINDOW_MS });
+        if (!authRate.allowed) {
+          return rateLimitExceeded(res, 'auth', authRate.retryAfterSeconds);
+        }
+
         const body = await readBody(req).catch((err) => err);
         if (body instanceof Error) {
           if (body.code === 'PAYLOAD_TOO_LARGE') return json(res, 413, { error: 'payload_too_large' });
@@ -401,6 +457,11 @@ function createApp() {
       if (req.method === 'POST' && reqUrl.pathname === '/api/auth/challenge') {
         const authTransportFailure = authTransportGuard(req);
         if (authTransportFailure) return json(res, authTransportFailure.status, authTransportFailure.body);
+
+        const authRate = authLimiter.consume({ key: `auth:${sourceIp}`, limit: RATE_LIMIT_AUTH_MAX, windowMs: RATE_LIMIT_AUTH_WINDOW_MS });
+        if (!authRate.allowed) {
+          return rateLimitExceeded(res, 'auth', authRate.retryAfterSeconds);
+        }
 
         const body = await readBody(req).catch((err) => err);
         if (body instanceof Error) {
@@ -533,6 +594,9 @@ function createApp() {
         if (!Number.isFinite(expectedGrossProfitUsd) || expectedGrossProfitUsd < 0 || !Number.isFinite(tradeSizeUsd) || tradeSizeUsd < 0) {
           return json(res, 400, { error: 'expectedGrossProfitUsd and tradeSizeUsd must be valid numbers' });
         }
+        if (tradeSizeUsd > MAX_TRADE_SIZE_USD) {
+          return json(res, 400, { error: 'tradeSizeUsd exceeds maximum allowed', reasonCode: 'TRADE_SIZE_EXCEEDS_MAXIMUM' });
+        }
         const user = getUser(identity);
         const auth = evaluateTradeAuthorization(user, {
           pair: body?.pair,
@@ -593,8 +657,14 @@ function createApp() {
         if (!body?.inputMint || !body?.outputMint || !Number.isFinite(amount) || amount <= 0) {
           return json(res, 400, { error: 'inputMint, outputMint, and positive amount are required' });
         }
+        if (amount > MAX_TRADE_AMOUNT) {
+          return json(res, 400, { error: 'amount exceeds maximum allowed', reasonCode: 'AMOUNT_EXCEEDS_MAXIMUM' });
+        }
         if (!Number.isFinite(tradeSizeUsd) || tradeSizeUsd < 0 || !Number.isFinite(expectedGrossProfitUsd) || expectedGrossProfitUsd < 0) {
           return json(res, 400, { error: 'tradeSizeUsd and expectedGrossProfitUsd must be valid numbers' });
+        }
+        if (tradeSizeUsd > MAX_TRADE_SIZE_USD) {
+          return json(res, 400, { error: 'tradeSizeUsd exceeds maximum allowed', reasonCode: 'TRADE_SIZE_EXCEEDS_MAXIMUM' });
         }
 
         const user = getUser(identity);

@@ -46,6 +46,9 @@ const AUTH_REQUIRE_SECURE_TRANSPORT = boolFromEnv(process.env.AUTH_REQUIRE_SECUR
 const TRUST_PROXY = boolFromEnv(process.env.TRUST_PROXY, IS_PRODUCTION);
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || '';
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || (HELIUS_API_KEY ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}` : '');
+const SOLANA_RPC_URL_SAFE = HELIUS_API_KEY && SOLANA_RPC_URL.includes(HELIUS_API_KEY)
+  ? SOLANA_RPC_URL.replace(HELIUS_API_KEY, '***')
+  : SOLANA_RPC_URL;
 const JUPITER_QUOTE_API_URL = process.env.JUPITER_QUOTE_API_URL || 'https://quote-api.jup.ag/v6/quote';
 const JUPITER_SWAP_API_URL = process.env.JUPITER_SWAP_API_URL || 'https://quote-api.jup.ag/v6/swap';
 const OPERATOR_AUTH_TOKEN = process.env.OPERATOR_AUTH_TOKEN || '';
@@ -67,7 +70,15 @@ const RATE_LIMIT_PUBLIC_MAX = numberFromEnv(process.env.RATE_LIMIT_PUBLIC_MAX, 6
 const RATE_LIMIT_PROTECTED_WINDOW_MS = numberFromEnv(process.env.RATE_LIMIT_PROTECTED_WINDOW_MS, 60000);
 const RATE_LIMIT_PROTECTED_MAX = numberFromEnv(process.env.RATE_LIMIT_PROTECTED_MAX, 120);
 
+const RATE_LIMIT_AUTH_WINDOW_MS = numberFromEnv(process.env.RATE_LIMIT_AUTH_WINDOW_MS, 900000);
+const RATE_LIMIT_AUTH_MAX = numberFromEnv(process.env.RATE_LIMIT_AUTH_MAX, 10);
+
+const MAX_TRADE_AMOUNT = numberFromEnv(process.env.MAX_TRADE_AMOUNT, 1e12);
+const MAX_TRADE_SIZE_USD = numberFromEnv(process.env.MAX_TRADE_SIZE_USD, 1000000);
+
 const MAX_BODY_BYTES = numberFromEnv(process.env.MAX_BODY_BYTES, 1024 * 1024);
+
+const CORS_ALLOWED_ORIGINS = process.env.CORS_ALLOWED_ORIGINS || '';
 
 function productionConfigErrors() {
   const errors = [];
@@ -109,6 +120,7 @@ module.exports = {
   TRUST_PROXY,
   HELIUS_API_KEY,
   SOLANA_RPC_URL,
+  SOLANA_RPC_URL_SAFE,
   JUPITER_QUOTE_API_URL,
   JUPITER_SWAP_API_URL,
   OPERATOR_AUTH_TOKEN,
@@ -129,6 +141,11 @@ module.exports = {
   RATE_LIMIT_PUBLIC_MAX,
   RATE_LIMIT_PROTECTED_WINDOW_MS,
   RATE_LIMIT_PROTECTED_MAX,
+  RATE_LIMIT_AUTH_WINDOW_MS,
+  RATE_LIMIT_AUTH_MAX,
+  MAX_TRADE_AMOUNT,
+  MAX_TRADE_SIZE_USD,
   MAX_BODY_BYTES,
+  CORS_ALLOWED_ORIGINS,
   productionConfigErrors
 };

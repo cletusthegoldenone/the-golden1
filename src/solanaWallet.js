@@ -1,33 +1,17 @@
 const crypto = require('crypto');
+const bs58 = require('bs58');
 
-const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
 function decodeBase58(value) {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error('INVALID_BASE58');
   }
-
-  let bytes = [0];
-  for (const char of value.trim()) {
-    const index = BASE58_ALPHABET.indexOf(char);
-    if (index === -1) throw new Error('INVALID_BASE58');
-
-    let carry = index;
-    for (let i = 0; i < bytes.length; i += 1) {
-      carry += bytes[i] * 58;
-      bytes[i] = carry & 0xff;
-      carry >>= 8;
-    }
-    while (carry > 0) {
-      bytes.push(carry & 0xff);
-      carry >>= 8;
-    }
+  try {
+    return Buffer.from(bs58.decode(value.trim()));
+  } catch (_) {
+    throw new Error('INVALID_BASE58');
   }
-
-  let zeros = 0;
-  while (zeros < value.length && value[zeros] === '1') zeros += 1;
-  return Buffer.from([...new Array(zeros).fill(0), ...bytes.reverse()]);
 }
 
 function rawPublicKeyToSpki(rawPublicKey) {
@@ -86,21 +70,29 @@ function walletIdentity(walletInput) {
   return `wallet:${crypto.createHash('sha256').update(rawPublicKey).digest('hex').slice(0, 32)}`;
 }
 
+const ED25519_SIGNATURE_LENGTH = 64;
+
 function decodeSignature(signature) {
   if (!signature || typeof signature !== 'string') {
     throw new Error('AUTH_SIGNATURE_REQUIRED');
   }
 
   const trimmed = signature.trim();
-  try {
+
+  // Only accept base64 if it decodes to exactly 64 bytes (ed25519 signature length).
+  if (/^[A-Za-z0-9+/]*={0,2}$/.test(trimmed)) {
     const buffer = Buffer.from(trimmed, 'base64');
-    if (buffer.length > 0) return buffer;
-  } catch (_) {
-    // fall through
+    if (buffer.length === ED25519_SIGNATURE_LENGTH) return buffer;
   }
 
-  const decoded = decodeBase58(trimmed);
-  if (!decoded.length) {
+  // Fall back to Base58 (also must be exactly 64 bytes).
+  let decoded;
+  try {
+    decoded = decodeBase58(trimmed);
+  } catch (_) {
+    throw new Error('AUTH_SIGNATURE_INVALID');
+  }
+  if (decoded.length !== ED25519_SIGNATURE_LENGTH) {
     throw new Error('AUTH_SIGNATURE_INVALID');
   }
   return decoded;
