@@ -129,6 +129,15 @@ function parseOptionalPositiveNumber(value) {
   return parsed;
 }
 
+function monthKey(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    const now = new Date();
+    return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
 function legalGateHtml() {
   return `<!doctype html>
 <html lang="en">
@@ -476,21 +485,34 @@ function createApp() {
           }
         }
 
+        const quantity = Number(body.quantity);
+        const priceUsd = Number(body.priceUsd);
+        const realizedPnlUsd = Number(body.realizedPnlUsd ?? 0);
+        const unrealizedPnlUsd = Number(body.unrealizedPnlUsd ?? 0);
+        if (![quantity, priceUsd, realizedPnlUsd, unrealizedPnlUsd].every(Number.isFinite)) {
+          return json(res, 400, { error: 'quantity, priceUsd, realizedPnlUsd, and unrealizedPnlUsd must be valid numbers' });
+        }
+
         const user = getUser(identity);
         const existing = state.transactions.get(user.id) || [];
         const record = {
           timestamp: body.timestamp,
           pair: body.pair,
           side: body.side,
-          quantity: Number(body.quantity),
-          priceUsd: Number(body.priceUsd),
-          realizedPnlUsd: Number(body.realizedPnlUsd || 0),
-          unrealizedPnlUsd: Number(body.unrealizedPnlUsd || 0)
+          quantity,
+          priceUsd,
+          realizedPnlUsd,
+          unrealizedPnlUsd
         };
         existing.push(record);
         setTransactions(user.id, existing);
 
         if (record.realizedPnlUsd > 0) {
+          const recordMonth = monthKey(record.timestamp);
+          if (user.monthlyGrossProfitPeriod !== recordMonth) {
+            user.monthlyGrossProfitUsd = 0;
+            user.monthlyGrossProfitPeriod = recordMonth;
+          }
           user.monthlyGrossProfitUsd = (user.monthlyGrossProfitUsd || 0) + record.realizedPnlUsd;
           saveState();
         }
