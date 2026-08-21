@@ -22,6 +22,7 @@ const { PersistenceError } = require('./persistence');
 const { RateLimiter } = require('./rateLimit');
 const { sendTransactionViaHelius } = require('./heliusSend');
 const { auditToken } = require('./rugcheck');
+const { handleChat } = require('./chat');
 
 const limiter = new RateLimiter();
 const authProvider = createAuthProvider();
@@ -607,6 +608,17 @@ function createApp() {
           feeRouting: authCheck.feeRouting,
           ...(tokenAudit ? { tokenAudit } : {})
         });
+      }
+
+      if (req.method === 'POST' && reqUrl.pathname === '/api/chat') {
+        const body = await readBody(req).catch((err) => err);
+        if (body instanceof Error) {
+          if (body.code === 'PAYLOAD_TOO_LARGE') return json(res, 413, { error: 'payload_too_large' });
+          return json(res, 400, { error: 'invalid_json' });
+        }
+
+        const result = await handleChat(body);
+        return json(res, result.status, result.payload);
       }
 
       return json(res, 404, { error: 'not_found' });
