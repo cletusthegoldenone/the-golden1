@@ -52,12 +52,16 @@ export default function CletusAIPage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
+  const liveOnRef = useRef(false);
+
+  useEffect(() => { liveOnRef.current = liveOn; }, [liveOn]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   // Load 8 token signals for this page
+
   useEffect(() => {
     async function loadSignals() {
       try {
@@ -136,7 +140,7 @@ export default function CletusAIPage() {
     const u = new SpeechSynthesisUtterance(text);
     u.rate = 1;
     u.onstart = () => setLiveStatus('speaking');
-    u.onend = () => setLiveStatus(liveOn ? 'listening' : 'idle');
+    u.onend = () => setLiveStatus(liveOnRef.current ? 'listening' : 'idle');
     window.speechSynthesis.speak(u);
   };
 
@@ -217,7 +221,7 @@ export default function CletusAIPage() {
     };
 
     recognition.onend = () => {
-      if (recognitionRef.current && liveOn) {
+      if (recognitionRef.current && liveOnRef.current) {
         try {
           recognition.start();
         } catch {
@@ -233,6 +237,7 @@ export default function CletusAIPage() {
       setLiveStatus('error');
     }
   }, [liveOn]);
+
 
   useEffect(() => {
     return () => stopLive();
