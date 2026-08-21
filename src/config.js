@@ -19,7 +19,7 @@ const HELIUS_API_KEY = process.env.HELIUS_API_KEY || '';
 const RUGCHECK_API_KEY = process.env.RUGCHECK_API_KEY || '';
 const RUGCHECK_MIN_SCORE = numberFromEnv(process.env.RUGCHECK_MIN_SCORE, 500);
 const RUGCHECK_BLOCK_ON_ERROR = boolFromEnv(process.env.RUGCHECK_BLOCK_ON_ERROR, false);
-const JUPITER_FEE_WALLET = process.env.JUPITER_FEE_WALLET || 'h1vRxwsCLUtiD6UiKpSgNnTDUAqvXCxurFVUfvH1noj';
+const JUPITER_FEE_WALLET = process.env.JUPITER_FEE_WALLET || 'GJwtCupMcNGbhGX1vapg2ueK2pedx2tgMkzGjhugnxaA';
 const FEE_ROUTING_ENABLED = process.env.FEE_ROUTING_ENABLED !== 'false';
 const FEE_ROUTING_BPS = numberFromEnv(process.env.FEE_ROUTING_BPS, 50);
 const TRIAL_DAYS = numberFromEnv(process.env.TRIAL_DAYS, 30);

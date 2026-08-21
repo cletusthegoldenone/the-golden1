@@ -2,8 +2,166 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Custom CSS Variables ─────────────────────────────────────────────── */
+:root {
+  --color-bg: #0a0b0d;
+  --color-bg-secondary: #111318;
+  --color-bg-card: #161b22;
+  --color-border: #21262d;
+  --color-border-glow: rgba(0, 212, 170, 0.3);
+  --color-text: #e6edf3;
+  --color-text-secondary: #8b949e;
+  --color-text-muted: #484f58;
+  --color-green: #00d4aa;
+  --color-green-dim: rgba(0, 212, 170, 0.15);
+  --color-red: #ff4757;
+  --color-red-dim: rgba(255, 71, 87, 0.15);
+  --color-yellow: #ffd700;
+  --color-blue: #58a6ff;
+  --color-purple: #bc8cff;
+  --color-orange: #ff8c00;
+  --color-signal-extreme: #ff4757;
+  --color-signal-strong: #ff8c00;
+  --color-signal-moderate: #ffd700;
+  --color-signal-weak: #58a6ff;
+}
+
 html,
 body {
-  background: #000;
-  color: #fff;
+  background: var(--color-bg);
+  color: var(--color-text);
 }
+
+/* ── Scrollbar ────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* ── Trading cards ────────────────────────────────────────────────────── */
+.trading-card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  transition: border-color 0.2s ease;
+}
+
+.trading-card:hover {
+  border-color: var(--color-border-glow);
+}
+
+.signal-card-extreme {
+  border-color: rgba(255, 71, 87, 0.4);
+  box-shadow: 0 0 20px rgba(255, 71, 87, 0.1);
+}
+
+.signal-card-strong {
+  border-color: rgba(255, 140, 0, 0.4);
+  box-shadow: 0 0 20px rgba(255, 140, 0, 0.1);
+}
+
+.signal-card-moderate {
+  border-color: rgba(255, 215, 0, 0.3);
+}
+
+.signal-card-weak {
+  border-color: rgba(88, 166, 255, 0.2);
+}
+
+/* ── Glow effects ─────────────────────────────────────────────────────── */
+.glow-green {
+  box-shadow: 0 0 20px rgba(0, 212, 170, 0.2), 0 0 40px rgba(0, 212, 170, 0.05);
+}
+
+.glow-red {
+  box-shadow: 0 0 20px rgba(255, 71, 87, 0.2), 0 0 40px rgba(255, 71, 87, 0.05);
+}
+
+/* ── Status dot pulse ─────────────────────────────────────────────────── */
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.status-dot-live {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* ── Gradient text ────────────────────────────────────────────────────── */
+.gradient-text-green {
+  background: linear-gradient(135deg, #00d4aa, #00ff87);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.gradient-text-gold {
+  background: linear-gradient(135deg, #ffd700, #ff8c00);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Tier badge colours ───────────────────────────────────────────────── */
+.tier-starter {
+  color: #8b949e;
+  border-color: #21262d;
+}
+
+.tier-gold {
+  color: var(--color-yellow);
+  border-color: rgba(255, 215, 0, 0.4);
+  box-shadow: 0 0 10px rgba(255, 215, 0, 0.15);
+}
+
+.tier-diamond {
+  color: var(--color-blue);
+  border-color: rgba(88, 166, 255, 0.4);
+  box-shadow: 0 0 10px rgba(88, 166, 255, 0.15);
+}
+
+.tier-founder {
+  color: var(--color-purple);
+  border-color: rgba(188, 140, 255, 0.4);
+  box-shadow: 0 0 10px rgba(188, 140, 255, 0.15);
+}
+
+/* ── Loading skeleton ─────────────────────────────────────────────────── */
+@keyframes shimmer {
+  0% {
+    background-position: -200px 0;
+  }
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-bg-card) 8%,
+    var(--color-border) 18%,
+    var(--color-bg-card) 33%
+  );
+  background-size: 200px 100%;
+  animation: shimmer 1.5s infinite;
+}
+
