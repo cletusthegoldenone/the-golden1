@@ -15,6 +15,7 @@ const POLICY_VERSIONS = {
   privacy: process.env.POLICY_VERSION_PRIVACY || '2026-08-19'
 };
 
+const HELIUS_API_KEY = process.env.HELIUS_API_KEY || '';
 const JUPITER_FEE_WALLET = process.env.JUPITER_FEE_WALLET || 'h1vRxwsCLUtiD6UiKpSgNnTDUAqvXCxurFVUfvH1noj';
 const FEE_ROUTING_ENABLED = process.env.FEE_ROUTING_ENABLED !== 'false';
 const FEE_ROUTING_BPS = numberFromEnv(process.env.FEE_ROUTING_BPS, 50);
@@ -63,6 +64,7 @@ function productionConfigErrors() {
 
 module.exports = {
   POLICY_VERSIONS,
+  HELIUS_API_KEY,
   JUPITER_FEE_WALLET,
   FEE_ROUTING_ENABLED,
   FEE_ROUTING_BPS,
