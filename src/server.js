@@ -20,6 +20,8 @@ const { createSessionToken, verifySessionToken, tokenFromRequest, sessionCookie,
 const { createAuthProvider, AuthProviderError, walletIdentity } = require('./authProvider');
 const { PersistenceError } = require('./persistence');
 const { RateLimiter } = require('./rateLimit');
+const { sendTransactionViaHelius } = require('./heliusSend');
+const { auditToken } = require('./rugcheck');
 const { handleChat } = require('./chat');
 
 const limiter = new RateLimiter();
@@ -134,7 +136,7 @@ function parseOptionalPositiveNumber(value) {
 }
 
 function legalGateHtml() {
-  return `<!doctype html><html><head><title>The Golden1 Legal Gate</title><style>body{margin:0;font-family:sans-serif;background:#fff;color:#111}main{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}section{max-width:720px}h1{font-size:2rem}</style></head><body><main><section><h1>Legal Acceptance Required</h1><p>You must accept Terms, Risk Disclaimer, Trading Authorization Disclosures, and Privacy Acknowledgement before app access.</p></section></main></body></html>`;
+  return `<!doctype html><html><head><title>The Golden1 Legal Gate</title><style>body{margin:0;font-family:sans-serif;background:#fff;color:#111}main{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}section{max-width:720px}h1{font-size:2rem}p.notice{background:#fffbe6;border:1px solid #f0c040;padding:1rem;border-radius:4px}</style></head><body><main><section><h1>Legal Acceptance Required</h1><p>You must accept Terms, Risk Disclaimer, Trading Authorization Disclosures, and Privacy Acknowledgement before app access.</p><p class="notice"><strong>Infrastructure &amp; Fee Disclosure:</strong> The Golden1 is operated using paid infrastructure (Helius RPC, Jupiter API, Gemini AI, RugCheck.xyz token safety audits, Railway, PostgreSQL). A portion of on-chain transaction rebates and a 0.5% routing fee on trades are directed to the operator wallet to offset these costs. All trades are automatically scanned against RugCheck.xyz before execution to protect you from known rug-pulls and unsafe tokens. This is a condition of use. By accepting, you acknowledge and consent to this fee structure and safety scanning.</p></section></main></body></html>`;
 }
 
 function verifyAuthContext(reqUrl, req) {
@@ -533,6 +535,78 @@ function createApp() {
                 revokeStatus: delegation.revokedAt ? 'REVOKED' : 'ACTIVE'
               }
             : null
+        });
+      }
+
+      if (req.method === 'GET' && reqUrl.pathname.startsWith('/api/protected/token/audit/')) {
+        const mint = reqUrl.pathname.slice('/api/protected/token/audit/'.length);
+        if (!mint) return json(res, 400, { error: 'mint address is required in path' });
+        let audit;
+        try {
+          audit = await auditToken(mint);
+        } catch (err) {
+          return json(res, 502, { error: 'rugcheck_failed', detail: err.message });
+        }
+        return json(res, audit.safe ? 200 : 200, { mint, ...audit });
+      }
+
+      if (req.method === 'POST' && reqUrl.pathname === '/api/protected/trade/send') {
+        const body = await readBody(req).catch((err) => err);
+        if (body instanceof Error) {
+          if (body.code === 'PAYLOAD_TOO_LARGE') return json(res, 413, { error: 'payload_too_large' });
+          return json(res, 400, { error: 'invalid_json' });
+        }
+
+        const { serializedTransaction, skipPreflight = true, preflightCommitment = 'processed',
+                pair, action = 'swap', tradeSizeUsd = 0, expectedGrossProfitUsd = 0,
+                mintAddress } = body || {};
+
+        if (typeof serializedTransaction !== 'string' || !serializedTransaction) {
+          return json(res, 400, { error: 'serializedTransaction (base-64) is required' });
+        }
+
+        const tSizeUsd = Number(tradeSizeUsd);
+        const tProfitUsd = Number(expectedGrossProfitUsd);
+        if (!Number.isFinite(tSizeUsd) || tSizeUsd < 0 || !Number.isFinite(tProfitUsd) || tProfitUsd < 0) {
+          return json(res, 400, { error: 'tradeSizeUsd and expectedGrossProfitUsd must be valid non-negative numbers' });
+        }
+
+        const user = getUser(identity);
+        const authCheck = evaluateTradeAuthorization(user, { pair, action, tradeSizeUsd: tSizeUsd, expectedGrossProfitUsd: tProfitUsd });
+        if (!authCheck.allowed) {
+          return json(res, 403, authCheck);
+        }
+
+        // Pre-flight rug check — block trades on tokens flagged as unsafe
+        let tokenAudit = null;
+        if (mintAddress) {
+          try {
+            tokenAudit = await auditToken(mintAddress);
+          } catch (err) {
+            tokenAudit = { safe: false, score: null, risks: ['RUGCHECK_ERROR'], raw: null };
+          }
+          if (!tokenAudit.safe) {
+            return json(res, 403, {
+              allowed: false,
+              reasonCode: 'TOKEN_FAILED_RUG_CHECK',
+              reason: 'Token did not pass RugCheck.xyz safety audit.',
+              tokenAudit
+            });
+          }
+        }
+
+        let result;
+        try {
+          result = await sendTransactionViaHelius(serializedTransaction, { skipPreflight, preflightCommitment });
+        } catch (err) {
+          return json(res, 502, { error: 'helius_send_failed', detail: err.message });
+        }
+
+        return json(res, 200, {
+          ok: true,
+          result,
+          feeRouting: authCheck.feeRouting,
+          ...(tokenAudit ? { tokenAudit } : {})
         });
       }
 
