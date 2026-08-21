@@ -6,7 +6,7 @@ export default function InvestorRelations() {
       <div className="mt-8 grid gap-6">
         {[
           { name: 'Developer', pct: 20 },
-          { name: 'Staking Rewards', pct: 25 },
+          { name: 'Platform Access Pool', pct: 25 },
           { name: 'Future Upgrades', pct: 30 },
           { name: 'Digital Bank Fund', pct: 25 }
         ].map((item, i) => (
@@ -23,7 +23,7 @@ export default function InvestorRelations() {
           </div>
         ))}
       </div>
-      <p className="text-xs text-white/40 mt-6">On-chain verifiable. Updated weekly.</p>
+      <p className="text-xs text-white/40 mt-6">Platform access pool sustains staking infrastructure. No SOL rewards or profit sharing are paid to stakers.</p>
     </div>
   );
 }
