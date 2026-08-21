@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "start:prod": "NODE_ENV=production node src/server.js",
-    "db:migrate": "echo 'No ORM migrations configured. Set PERSISTENCE_ADAPTER=postgres and wire a migration tool.'",
+    "db:migrate": "node -e \"process.stderr.write('ERROR: db:migrate is not configured. Set PERSISTENCE_ADAPTER=postgres and wire a migration tool before using this command in production.\\n'); process.exit(1);\"",
     "test": "node --test"
   },
   "repository": {

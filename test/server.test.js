@@ -473,6 +473,25 @@ test('production cookie security and TLS-aware auth safeguards are enforced', as
   }
 });
 
+test('/healthz and /api/health return 200 with expected JSON shape', async () => {
+  const persistencePath = dataFilePath('health-endpoints');
+  const appModules = loadApp({ PERSISTENCE_FILE_PATH: persistencePath });
+  const { app, baseUrl } = await startServer(appModules.createApp);
+
+  try {
+    for (const endpoint of ['/healthz', '/api/health']) {
+      const res = await fetch(`${baseUrl}${endpoint}`);
+      assert.equal(res.status, 200, `${endpoint} should return 200`);
+      const payload = await res.json();
+      assert.equal(payload.ok, true, `${endpoint} payload.ok should be true`);
+      assert.equal(payload.service, 'the-golden1', `${endpoint} payload.service should be 'the-golden1'`);
+    }
+  } finally {
+    app.close();
+    fs.rmSync(persistencePath, { force: true });
+  }
+});
+
 test('readiness and deterministic persistence failures are exposed for managed adapter path', async () => {
   const persistencePath = dataFilePath('postgres-ready');
   const appModules = loadApp({
