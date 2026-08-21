@@ -18,15 +18,20 @@ export default function GeminiLiveChat() {
     setInput('');
     setLoading(true);
 
-    const res = await fetch('/api/ai', { // or your existing /api/ai
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: input, wallet: publicKey?.toBase58(), history: messages })
-    });
-    const data = await res.json();
-
-    setMessages(prev => [...prev, { role: 'assistant', content: data.answer || data.response || "No response" }]);
-    setLoading(false);
+    try {
+      const res = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: input, wallet: publicKey?.toBase58(), history: messages })
+      });
+      const data = await res.json();
+      setMessages(prev => [...prev, { role: 'assistant', content: data.answer || data.response || 'No response' }]);
+    } catch (err) {
+      console.error('GeminiLiveChat fetch error:', err);
+      setMessages(prev => [...prev, { role: 'assistant', content: '⚠️ Network error — please try again.' }]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);

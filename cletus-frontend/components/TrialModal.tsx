@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 
 interface TrialModalProps {
   open: boolean;
@@ -8,12 +9,13 @@ interface TrialModalProps {
 }
 
 export default function TrialModal({ open, onClose }: TrialModalProps) {
-  const { connect, publicKey } = useWallet();
+  const { publicKey } = useWallet();
+  const { setVisible } = useWalletModal();
   const [active, setActive] = useState(false);
 
   const activate = async () => {
     if (!publicKey) {
-      await connect();
+      setVisible(true);
       return;
     }
     try {

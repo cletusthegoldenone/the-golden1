@@ -7,7 +7,7 @@ import type { Timeframe, CandleData } from '@/types';
 const PRICE_DRIFT_BIAS = 0.49;
 
 // Generate realistic mock candle data
-function generateCandles(count: number, basePrice: number, volatility: number): CandleData[] {
+function generateCandles(count: number, basePrice: number, volatility: number, intervalSeconds = 60): CandleData[] {
   const candles: CandleData[] = [];
   let price = basePrice;
   const now = Math.floor(Date.now() / 1000);
@@ -21,7 +21,7 @@ function generateCandles(count: number, basePrice: number, volatility: number): 
     const volume = Math.random() * 500000 + 50000;
 
     candles.push({
-      time: now - i * 60,
+      time: now - i * intervalSeconds,
       open,
       high,
       low,
@@ -211,7 +211,7 @@ export default function CandlestickChart() {
   const loadCandles = useCallback(() => {
     const tfInfo = TIMEFRAMES.find((t) => t.value === timeframe)!;
     const count = 200;
-    const newCandles = generateCandles(count, selectedPair.base, selectedPair.vol);
+    const newCandles = generateCandles(count, selectedPair.base, selectedPair.vol, tfInfo.seconds);
     setCandles(newCandles);
 
     const lastCandle = newCandles[newCandles.length - 1];

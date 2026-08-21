@@ -5,10 +5,10 @@ export default function InvestorRelations() {
       <p className="text-white/70 mt-2">Where your trading fees and staking rewards go</p>
       <div className="mt-8 grid gap-6">
         {[
-          { name: 'AI & Development', pct: 35 },
-          { name: 'Staking Rewards', pct: 30 },
-          { name: 'Liquidity', pct: 20 },
-          { name: 'Community', pct: 15 }
+          { name: 'Developer', pct: 20 },
+          { name: 'Staking Rewards', pct: 25 },
+          { name: 'Future Upgrades', pct: 30 },
+          { name: 'Digital Bank Fund', pct: 25 }
         ].map((item, i) => (
           <div key={i} className="flex items-center gap-4">
             <div className="flex-1">
