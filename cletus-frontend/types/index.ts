@@ -52,8 +52,8 @@ export type StakingTier =
 export interface TierInfo {
   name: StakingTier;
   minStake: number;
-  apy: number;
-  profitShare: number;
+  /** Monthly platform trading limit unlocked by this tier (USD, 0 = unlimited) */
+  monthlyTradingLimit: number;
   color: string;
   icon: string;
 }
@@ -62,16 +62,15 @@ export interface StakingPosition {
   staked: number;
   tier: StakingTier;
   stakedAt: number;
+  /** Reserved for future platform-utility rewards (not SOL, not profit share) */
   pendingRewards: number;
-  pendingSolRewards: number;
   totalEarned: number;
-  profitShareEarned: number;
 }
 
 export interface DistributionRecord {
   month: string;
-  solRewards: number;
-  profitShare: number;
+  /** Platform access pool allocation for this period */
+  platformAccessAllocation: number;
   total: number;
   claimed: boolean;
 }
@@ -175,8 +174,8 @@ export interface FeeDistribution {
   totalFee: number;
   /** 20% to developer */
   developer: number;
-  /** 25% for staking rewards */
-  stakingRewards: number;
+  /** 25% to platform access pool (sustains staking program infrastructure) */
+  platformAccess: number;
   /** 30% for future upgrades */
   futureUpgrades: number;
   /** 25% to digital bank fund */
@@ -189,8 +188,8 @@ export interface AggregatedFeeDistribution {
   totalFeesCollected: number;
   /** Total distributed to developer wallet */
   totalDeveloper: number;
-  /** Total distributed to staking rewards wallet */
-  totalStakingRewards: number;
+  /** Total distributed to platform access pool */
+  totalPlatformAccess: number;
   /** Total distributed to future upgrades wallet */
   totalFutureUpgrades: number;
   /** Total distributed to digital bank wallet */

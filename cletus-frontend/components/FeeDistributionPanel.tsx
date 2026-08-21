@@ -32,15 +32,15 @@ export default function FeeDistributionPanel() {
       description: 'Platform development & maintenance',
     },
     {
-      label: 'Staking Rewards',
-      percent: TRADING_FEE_DISTRIBUTION.STAKING_REWARDS,
-      amount: feeDistribution.totalStakingRewards,
-      wallet: FEE_DISTRIBUTION_WALLETS.STAKING_REWARDS,
+      label: 'Platform Access Pool',
+      percent: TRADING_FEE_DISTRIBUTION.PLATFORM_ACCESS,
+      amount: feeDistribution.totalPlatformAccess,
+      wallet: FEE_DISTRIBUTION_WALLETS.PLATFORM_ACCESS,
       color: 'text-trading-green',
       bgColor: 'bg-trading-green/20',
       borderColor: 'border-trading-green/40',
-      icon: '💰',
-      description: 'SOL rewards for CLETUS stakers',
+      icon: '🔑',
+      description: 'Sustains staking program infrastructure',
     },
     {
       label: 'Future Upgrades',
@@ -72,7 +72,7 @@ export default function FeeDistributionPanel() {
         <div>
           <h3 className="text-lg font-bold text-white mb-1">Fee Distribution</h3>
           <p className="text-xs text-gray-500">
-            1% fee per trade split across platform development, staker rewards, upgrades & banking
+            1% fee per trade split across platform development, access pool, upgrades & banking
           </p>
         </div>
         <div className="text-right">

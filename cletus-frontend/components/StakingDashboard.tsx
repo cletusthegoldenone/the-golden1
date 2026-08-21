@@ -4,13 +4,13 @@ import { useState } from 'react';
 import type { TierInfo } from '@/types';
 
 const TIERS: TierInfo[] = [
-  { name: 'Starter', minStake: 100_000, apy: 0.5, profitShare: 0, color: '#6b7280', icon: '🌱' },
-  { name: 'Bronze', minStake: 500_000, apy: 0.5, profitShare: 1, color: '#b45309', icon: '🥉' },
-  { name: 'Silver', minStake: 1_000_000, apy: 0.5, profitShare: 2, color: '#9ca3af', icon: '🥈' },
-  { name: 'Gold', minStake: 5_000_000, apy: 0.5, profitShare: 5, color: '#f59e0b', icon: '🥇' },
-  { name: 'Platinum', minStake: 10_000_000, apy: 0.5, profitShare: 10, color: '#22d3ee', icon: '💠' },
-  { name: 'Diamond', minStake: 25_000_000, apy: 0.5, profitShare: 20, color: '#60a5fa', icon: '💎' },
-  { name: 'Founder', minStake: 100_000_000, apy: 0.5, profitShare: 35, color: '#c084fc', icon: '👑' },
+  { name: 'Starter', minStake: 100_000, monthlyTradingLimit: 500, color: '#6b7280', icon: '🌱' },
+  { name: 'Bronze', minStake: 500_000, monthlyTradingLimit: 1000, color: '#b45309', icon: '🥉' },
+  { name: 'Silver', minStake: 1_000_000, monthlyTradingLimit: 2000, color: '#9ca3af', icon: '🥈' },
+  { name: 'Gold', minStake: 5_000_000, monthlyTradingLimit: 5000, color: '#f59e0b', icon: '🥇' },
+  { name: 'Platinum', minStake: 10_000_000, monthlyTradingLimit: 15000, color: '#22d3ee', icon: '💠' },
+  { name: 'Diamond', minStake: 25_000_000, monthlyTradingLimit: 50000, color: '#60a5fa', icon: '💎' },
+  { name: 'Founder', minStake: 100_000_000, monthlyTradingLimit: 0, color: '#c084fc', icon: '👑' },
 ];
 
 
@@ -54,10 +54,11 @@ function TierCard({
       <div className="text-xs text-gray-500 mt-1">
         {(tier.minStake / 1e6).toFixed(1)}M CLETUS
       </div>
-      <div className="text-xs text-trading-green mt-1">{tier.apy}% APY</div>
-      {tier.profitShare > 0 && (
-        <div className="text-xs text-trading-blue">{tier.profitShare}% profit share</div>
-      )}
+      <div className="text-xs mt-1" style={{ color: tier.color }}>
+        {tier.monthlyTradingLimit > 0
+          ? `$${tier.monthlyTradingLimit.toLocaleString()} / mo trading limit`
+          : 'Unlimited trading limit'}
+      </div>
     </div>
   );
 }
@@ -95,7 +96,7 @@ export default function StakingDashboard() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="font-bold text-lg">Staking Tiers — Preview</h2>
-            <p className="text-sm text-gray-400">Stake $CLETUS to earn SOL APY + monthly profit share from Cletus trading</p>
+            <p className="text-sm text-gray-400">Stake $CLETUS to unlock your monthly platform trading limit</p>
           </div>
           <span className="text-xs px-2.5 py-1 rounded-full bg-trading-purple/20 text-trading-purple border border-trading-purple/30 font-mono">
             PREVIEW
@@ -148,9 +149,9 @@ export default function StakingDashboard() {
               desc: 'Lock your $CLETUS in the staking contract. Your tokens stay in your control — unstake anytime after the 7-day cooldown.',
             },
             {
-              icon: '💰',
-              title: 'Earn Monthly',
-              desc: '0.5% SOL APY on your staked position, plus a share of Cletus\'s monthly trading profits based on your tier.',
+              icon: '📊',
+              title: 'Unlock Your Tier',
+              desc: 'Your staked amount determines your monthly platform trading limit — the maximum Cletus can trade on your behalf each month.',
             },
           ].map((step) => (
             <div key={step.title} className="flex gap-3">
@@ -167,9 +168,9 @@ export default function StakingDashboard() {
       {/* Fee distribution reminder */}
       <div className="trading-card p-4 border-trading-border/50">
         <p className="text-xs text-gray-500">
-          💡 Every trade closed on Cletus generates a 1% fee that is distributed as follows:
-          20% to development, 25% to staking rewards pool, 30% to platform upgrades, 25% to digital bank fund.
-          Stakers at Gold tier and above receive a direct monthly profit share on top of SOL APY.
+          💡 Every trade closed on Cletus generates a 1% fee distributed as follows:
+          20% to development, 25% to platform access pool, 30% to platform upgrades, 25% to digital bank fund.
+          Staking does not pay SOL rewards or profit share — it unlocks your monthly trading limit tier.
         </p>
       </div>
     </div>

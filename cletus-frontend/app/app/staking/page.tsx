@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Staking page — tier levels (stake amount → monthly profit cap)
+ * Staking page — tier levels (stake amount → monthly platform trading limit)
  * + stake UI for Coming Soon $CLETUS token
  * Black background, logo on every page.
  * Route: /app/staking
@@ -31,7 +31,7 @@ const TIERS: Tier[] = [
     stakeLabel: '500K',
     stakeMin: 500_000,
     profitCap: '$750',
-    profitSub: 'monthly profit cap from Cletus trading',
+    profitSub: 'monthly platform trading limit',
     icon: '🌱',
     accent: 'text-emerald-400',
     border: 'border-emerald-500/40',
@@ -42,7 +42,7 @@ const TIERS: Tier[] = [
     stakeLabel: '2M',
     stakeMin: 2_000_000,
     profitCap: '$1,500',
-    profitSub: 'monthly profit cap from Cletus trading',
+    profitSub: 'monthly platform trading limit',
     icon: '📈',
     accent: 'text-blue-400',
     border: 'border-blue-500/40',
@@ -53,7 +53,7 @@ const TIERS: Tier[] = [
     stakeLabel: '5M',
     stakeMin: 5_000_000,
     profitCap: '$3,000',
-    profitSub: 'monthly profit cap from Cletus trading',
+    profitSub: 'monthly platform trading limit',
     icon: '⚡',
     accent: 'text-emerald-400',
     border: 'border-emerald-500',
@@ -65,7 +65,7 @@ const TIERS: Tier[] = [
     stakeLabel: '10M',
     stakeMin: 10_000_000,
     profitCap: '$10,000',
-    profitSub: 'monthly profit cap from Cletus trading',
+    profitSub: 'monthly platform trading limit',
     icon: '👑',
     accent: 'text-yellow-400',
     border: 'border-yellow-500/40',
@@ -76,7 +76,7 @@ const TIERS: Tier[] = [
     stakeLabel: '25M+',
     stakeMin: 25_000_000,
     profitCap: 'Unlimited',
-    profitSub: 'profit from Cletus trading',
+    profitSub: 'monthly platform trading limit',
     icon: '🐋',
     accent: 'text-purple-400',
     border: 'border-purple-500/40',
@@ -145,15 +145,14 @@ export default function StakingPage() {
             </div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Staking</h1>
             <p className="text-sm text-white/50 mt-2">
-              How much you stake sets your <strong className="text-white/70">monthly profit cap</strong> from
-              Cletus trading on your behalf. Stake the Coming Soon <strong className="text-yellow-400">$CLETUS</strong> token when it launches.
+              How much you stake sets your <strong className="text-white/70">monthly platform trading limit</strong> — the maximum Cletus can trade on your behalf each month. Stake the Coming Soon <strong className="text-yellow-400">$CLETUS</strong> token when it launches.
             </p>
           </div>
 
           {/* Tier levels — same model as other dashboard */}
           <section>
             <h2 className="text-xs font-semibold uppercase tracking-wider text-white/40 mb-4 text-center">
-              Tier levels · stake → monthly profit cap
+              Tier levels · stake → monthly trading limit
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
               {TIERS.map((t) => (
@@ -195,9 +194,7 @@ export default function StakingPage() {
               ))}
             </div>
             <p className="mt-4 text-xs text-white/30 text-center max-w-2xl mx-auto">
-              Profit figures are <strong className="text-white/40">caps</strong> on what you can earn from Cletus
-              trading for you — not guarantees. Actual results depend on markets and performance. Unstake
-              rules will apply when the token is live.
+              Trading limits are the <strong className="text-white/40">maximum</strong> Cletus can trade on your behalf per month — not guarantees of profit. Staking does not pay SOL rewards or profit sharing. Actual trading results depend on markets and performance. Unstake rules will apply when the token is live.
             </p>
           </section>
 
@@ -251,7 +248,7 @@ export default function StakingPage() {
                     className="mt-1 h-4 w-4 accent-yellow-500"
                   />
                   <span className="text-xs text-white/60">
-                    I understand $CLETUS staking is Coming Soon, profit caps are not guaranteed returns,
+                    I understand $CLETUS staking is Coming Soon, trading limits are not guaranteed returns,
                     and I will only stake what I can afford to lock under final token terms.
                   </span>
                 </label>

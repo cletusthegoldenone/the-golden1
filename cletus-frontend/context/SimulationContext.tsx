@@ -24,8 +24,8 @@ export const FEE_WALLET = 'GJwtCupMcNGbhGX1vapg2ueK2pedx2tgMkzGjhugnxaA';
 export const TRADING_FEE_DISTRIBUTION = {
   /** 20% to developer/creator */
   DEVELOPER: 0.20,
-  /** 25% for staking rewards */
-  STAKING_REWARDS: 0.25,
+  /** 25% to platform access pool (sustains staking program infrastructure — no SOL rewards or profit share paid to stakers) */
+  PLATFORM_ACCESS: 0.25,
   /** 30% for future Cletus upgrades */
   FUTURE_UPGRADES: 0.30,
   /** 25% to fund future digital bank */
@@ -36,8 +36,8 @@ export const TRADING_FEE_DISTRIBUTION = {
 export const CREATOR_FEE_DISTRIBUTION = {
   /** 50% into liquidity pool */
   LIQUIDITY: 0.50,
-  /** 50% to help pay stakers */
-  STAKER_SUPPORT: 0.50,
+  /** 50% to platform access pool */
+  PLATFORM_ACCESS: 0.50,
 } as const;
 
 /** Wallet addresses for fee distribution */
@@ -45,11 +45,13 @@ export const FEE_DISTRIBUTION_WALLETS = {
   /** Developer wallet (20% of trading fees) — live wallet */
   DEVELOPER: 'GJwtCupMcNGbhGX1vapg2ueK2pedx2tgMkzGjhugnxaA',
   /**
-   * Staking rewards wallet (25% of trading fees + 50% of creator fees)
+   * Platform access pool wallet (25% of trading fees + 50% of creator fees)
+   * Sustains the staking program infrastructure. Does not distribute SOL rewards
+   * or profit share to stakers.
    * TODO: Replace with the deployed staking program's treasury PDA once the
    *       $CLETUS token and staking contract are deployed on Solana mainnet.
    */
-  STAKING_REWARDS: 'GJwtCupMcNGbhGX1vapg2ueK2pedx2tgMkzGjhugnxaA',
+  PLATFORM_ACCESS: 'GJwtCupMcNGbhGX1vapg2ueK2pedx2tgMkzGjhugnxaA',
   /**
    * Future upgrades wallet (30% of trading fees)
    * TODO: Replace with a dedicated upgrades multisig wallet before mainnet launch.
@@ -78,7 +80,7 @@ export function calculateFeeDistribution(totalFee: number): FeeDistribution {
   return {
     totalFee,
     developer: totalFee * TRADING_FEE_DISTRIBUTION.DEVELOPER,
-    stakingRewards: totalFee * TRADING_FEE_DISTRIBUTION.STAKING_REWARDS,
+    platformAccess: totalFee * TRADING_FEE_DISTRIBUTION.PLATFORM_ACCESS,
     futureUpgrades: totalFee * TRADING_FEE_DISTRIBUTION.FUTURE_UPGRADES,
     digitalBank: totalFee * TRADING_FEE_DISTRIBUTION.DIGITAL_BANK,
   };
@@ -244,7 +246,7 @@ function makeInitialStats(config: TradingConfig): SimulationStats {
     feeDistribution: {
       totalFeesCollected: 0,
       totalDeveloper: 0,
-      totalStakingRewards: 0,
+      totalPlatformAccess: 0,
       totalFutureUpgrades: 0,
       totalDigitalBank: 0,
     },
@@ -358,7 +360,7 @@ export function SimulationProvider({ children }: { children: React.ReactNode }) 
         feeDistribution: {
           totalFeesCollected: prev.feeDistribution.totalFeesCollected + feeDistribution.totalFee,
           totalDeveloper: prev.feeDistribution.totalDeveloper + feeDistribution.developer,
-          totalStakingRewards: prev.feeDistribution.totalStakingRewards + feeDistribution.stakingRewards,
+          totalPlatformAccess: prev.feeDistribution.totalPlatformAccess + feeDistribution.platformAccess,
           totalFutureUpgrades: prev.feeDistribution.totalFutureUpgrades + feeDistribution.futureUpgrades,
           totalDigitalBank: prev.feeDistribution.totalDigitalBank + feeDistribution.digitalBank,
         },
@@ -389,7 +391,7 @@ export function SimulationProvider({ children }: { children: React.ReactNode }) 
         let aggregatedFeeDist = {
           totalFee: 0,
           developer: 0,
-          stakingRewards: 0,
+          platformAccess: 0,
           futureUpgrades: 0,
           digitalBank: 0,
         };
@@ -449,7 +451,7 @@ export function SimulationProvider({ children }: { children: React.ReactNode }) 
             totalFeesDelta += feeUsd;
             aggregatedFeeDist.totalFee += feeDistribution.totalFee;
             aggregatedFeeDist.developer += feeDistribution.developer;
-            aggregatedFeeDist.stakingRewards += feeDistribution.stakingRewards;
+            aggregatedFeeDist.platformAccess += feeDistribution.platformAccess;
             aggregatedFeeDist.futureUpgrades += feeDistribution.futureUpgrades;
             aggregatedFeeDist.digitalBank += feeDistribution.digitalBank;
             if (closingPnl > 0) newWins++; else newLosses++;
@@ -488,7 +490,7 @@ export function SimulationProvider({ children }: { children: React.ReactNode }) 
           feeDistribution: {
             totalFeesCollected: prev.feeDistribution.totalFeesCollected + aggregatedFeeDist.totalFee,
             totalDeveloper: prev.feeDistribution.totalDeveloper + aggregatedFeeDist.developer,
-            totalStakingRewards: prev.feeDistribution.totalStakingRewards + aggregatedFeeDist.stakingRewards,
+            totalPlatformAccess: prev.feeDistribution.totalPlatformAccess + aggregatedFeeDist.platformAccess,
             totalFutureUpgrades: prev.feeDistribution.totalFutureUpgrades + aggregatedFeeDist.futureUpgrades,
             totalDigitalBank: prev.feeDistribution.totalDigitalBank + aggregatedFeeDist.digitalBank,
           },
