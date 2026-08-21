@@ -1,20 +1,22 @@
 {
   "name": "the-golden1",
   "version": "1.0.0",
-  "description": "The Golden1 is the production direction for **Cletus**: a Jupiter-native Solana trading super app with strict safety controls, legal gating, user-consent architecture, and configurable autonomy.",
+  "description": "The Golden1 (Cletus) — Jupiter-native Solana trading policy API",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
     "start:prod": "NODE_ENV=production node src/server.js",
-    "db:migrate": "node -e \"process.stderr.write('ERROR: db:migrate is not configured. Set PERSISTENCE_ADAPTER=postgres and wire a migration tool before using this command in production.\\n'); process.exit(1);\"",
-    "test": "node --test"
+    "test": "node --test",
+    "db:migrate": "node -e \"process.stderr.write('ERROR: db:migrate is not configured. Set PERSISTENCE_ADAPTER=postgres and wire a migration tool before using this command in production.\\n'); process.exit(1);\""
+  },
+  "engines": {
+    "node": ">=18"
   },
   "repository": {
     "type": "git",
-    "url": "http://localhost:26831/cletusthegoldenone/the-golden1"
+    "url": "https://github.com/cletusthegoldenone/the-golden1"
   },
-  "keywords": [],
-  "author": "",
   "license": "ISC",
-  "type": "commonjs"
+  "type": "commonjs",
+  "dependencies": {}
 }

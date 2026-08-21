@@ -1,0 +1,13 @@
+# Paste into Railway → Web service (Root Directory = cletus-frontend)
+# Do NOT set PORT
+
+NODE_ENV=production
+NEXT_PUBLIC_API_URL=https://YOUR-API-SERVICE.up.railway.app
+
+HELIUS_API_KEY=
+JUPITER_API_KEY=
+GEMINI_API_KEY=
+RUGCHECK_API_KEY=
+
+# Optional if Next API routes use Postgres:
+# DATABASE_URL=${{Postgres.DATABASE_URL}}

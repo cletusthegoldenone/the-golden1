@@ -1,8 +1,14 @@
+# Root service = API (Node src/server.js)
+# Railway → Root Directory: empty / .
+
 [build]
 builder = "nixpacks"
+# No compile step — pure Node
+buildCommand = "npm install"
 
 [deploy]
 startCommand = "npm start"
+# server.js exposes both /healthz and /api/health
 healthcheckPath = "/api/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
