@@ -108,7 +108,7 @@ export default function FeeDistributionPanel() {
               </div>
             </div>
             <div className="mt-2 text-xs font-mono break-all">
-              {dist.wallet === '9xQeKq6isj8Xu26Ku2b3FqxZsEaq5XfVhJ5dNon9Mop7' && dist.label !== 'Developer' ? (
+              {dist.wallet === 'GJwtCupMcNGbhGX1vapg2ueK2pedx2tgMkzGjhugnxaA' && dist.label !== 'Developer' ? (
                 <span className="text-trading-yellow">⚠ Temp: dev wallet — update before mainnet</span>
               ) : (
                 <span className="text-gray-600">{dist.wallet}</span>

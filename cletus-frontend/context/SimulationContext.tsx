@@ -16,7 +16,7 @@ import type { TradingConfig, SimulatedPosition, AggressionLevel, FeeDistribution
 export const TRADE_FEE_PERCENT = 1.0;
 
 /** Wallet address that receives all trade fees */
-export const FEE_WALLET = '9xQeKq6isj8Xu26Ku2b3FqxZsEaq5XfVhJ5dNon9Mop7';
+export const FEE_WALLET = 'GJwtCupMcNGbhGX1vapg2ueK2pedx2tgMkzGjhugnxaA';
 
 // ── Fee Distribution Model ────────────────────────────────────────────────────
 
@@ -43,28 +43,28 @@ export const CREATOR_FEE_DISTRIBUTION = {
 /** Wallet addresses for fee distribution */
 export const FEE_DISTRIBUTION_WALLETS = {
   /** Developer wallet (20% of trading fees) — live wallet */
-  DEVELOPER: '9xQeKq6isj8Xu26Ku2b3FqxZsEaq5XfVhJ5dNon9Mop7',
+  DEVELOPER: 'GJwtCupMcNGbhGX1vapg2ueK2pedx2tgMkzGjhugnxaA',
   /**
    * Staking rewards wallet (25% of trading fees + 50% of creator fees)
    * TODO: Replace with the deployed staking program's treasury PDA once the
    *       $CLETUS token and staking contract are deployed on Solana mainnet.
    */
-  STAKING_REWARDS: '9xQeKq6isj8Xu26Ku2b3FqxZsEaq5XfVhJ5dNon9Mop7',
+  STAKING_REWARDS: 'GJwtCupMcNGbhGX1vapg2ueK2pedx2tgMkzGjhugnxaA',
   /**
    * Future upgrades wallet (30% of trading fees)
    * TODO: Replace with a dedicated upgrades multisig wallet before mainnet launch.
    */
-  FUTURE_UPGRADES: '9xQeKq6isj8Xu26Ku2b3FqxZsEaq5XfVhJ5dNon9Mop7',
+  FUTURE_UPGRADES: 'GJwtCupMcNGbhGX1vapg2ueK2pedx2tgMkzGjhugnxaA',
   /**
    * Digital bank wallet (25% of trading fees)
    * TODO: Replace with the digital bank fund wallet before mainnet launch.
    */
-  DIGITAL_BANK: '9xQeKq6isj8Xu26Ku2b3FqxZsEaq5XfVhJ5dNon9Mop7',
+  DIGITAL_BANK: 'GJwtCupMcNGbhGX1vapg2ueK2pedx2tgMkzGjhugnxaA',
   /**
    * Liquidity pool wallet (50% of creator fees)
    * TODO: Replace with the Raydium LP wallet address after token launch.
    */
-  LIQUIDITY: '9xQeKq6isj8Xu26Ku2b3FqxZsEaq5XfVhJ5dNon9Mop7',
+  LIQUIDITY: 'GJwtCupMcNGbhGX1vapg2ueK2pedx2tgMkzGjhugnxaA',
 } as const;
 
 // ── Fee Distribution Helper ───────────────────────────────────────────────────

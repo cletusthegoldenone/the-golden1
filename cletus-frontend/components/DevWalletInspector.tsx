@@ -106,7 +106,7 @@ export default function DevWalletInspector() {
 
   // Real Solana mainnet wallets for demonstration
   const EXAMPLE_ADDRESSES = [
-    { label: '🪿 Cletus Dev', addr: '9xQeKq6isj8Xu26Ku2b3FqxZsEaq5XfVhJ5dNon9Mop7' },
+    { label: '🪿 Cletus Dev', addr: 'GJwtCupMcNGbhGX1vapg2ueK2pedx2tgMkzGjhugnxaA' },
     { label: '🏦 Binance Hot', addr: '5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9' },
   ];
 
