@@ -1,7 +1,3 @@
-# Web service = Next.js
-# Railway → Root Directory: cletus-frontend
-# Copy this file to cletus-frontend/railway.toml (or merge)
-
 [build]
 builder = "nixpacks"
 buildCommand = "npm install --omit=optional && npm run build"
