@@ -45,9 +45,23 @@ export default function TaxCenterRegisterPage() {
     setError('');
 
     try {
-      // Wire to Golden1: register + start trial
-      // POST /api/register, tax profile, trial start
-      router.push('/app/wallet');
+      const res = await fetch('/api/trial/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullLegalName: form.fullLegalName.trim(),
+          email: form.email.trim(),
+          country: form.country.trim(),
+          taxId: form.taxId.trim(),
+          acknowledgedAt: new Date().toISOString(),
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error('Trial start failed');
+      }
+
+      router.push('/app');
     } catch {
       setError('Registration failed. Please try again.');
       setSubmitting(false);

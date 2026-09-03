@@ -27,18 +27,35 @@ type Signal = {
 
 type ApiSignal = Partial<{
   id: string;
+  base: string;
   tokenName: string;
+  side: 'LONG' | 'SHORT' | string;
   direction: 'LONG' | 'SHORT' | string;
+  score: number | string;
   compositeScore: number;
+  priceUsd: number | string;
   currentPrice: number;
+  change24h: number | string;
   priceChange24h: number;
-  volume24h: number;
-  marketCap: number;
+  volume24h: number | string;
+  marketCap: number | string;
+  mcap: number | string;
+  updatedAt: string;
+  signals: string[];
   strength: 'WEAK' | 'MODERATE' | 'STRONG' | 'EXTREME';
 }>;
 
 function toNumber(value: unknown, fallback = 0) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : fallback;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
+}
+
+function toText(value: unknown, fallback = 'UNKNOWN') {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
 function toSide(value: unknown): 'LONG' | 'SHORT' {
@@ -47,8 +64,8 @@ function toSide(value: unknown): 'LONG' | 'SHORT' {
 
 function deriveTags(s: ApiSignal) {
   const tags: string[] = [];
-  const score = toNumber(s.compositeScore);
-  const change24h = toNumber(s.priceChange24h);
+  const score = toNumber(s.score ?? s.compositeScore);
+  const change24h = toNumber(s.change24h ?? s.priceChange24h);
 
   if (s.strength) tags.push(s.strength);
   if (score >= 0.75) tags.push('High Conviction');
@@ -82,14 +99,16 @@ export default function SignalsPage() {
       const res = await fetch('/api/signals?quote=USDC');
       if (res.ok) {
         const data = await res.json();
-        const mapped: Signal[] = (data.signals ?? []).map((s: ApiSignal, i: number) => {
-          const base = (s.tokenName ?? 'UNKNOWN').toUpperCase();
-          const side = toSide(s.direction);
-          const score = Math.round(toNumber(s.compositeScore) * 100);
-          const priceUsd = toNumber(s.currentPrice);
-          const change24h = toNumber(s.priceChange24h);
+        const rawSignals = Array.isArray(data?.signals) ? data.signals : [];
+        const mapped: Signal[] = rawSignals.map((s: ApiSignal, i: number) => {
+          const base = toText(s.base ?? s.tokenName).toUpperCase();
+          const side = toSide(s.side ?? s.direction);
+          const rawScore = toNumber(s.score ?? s.compositeScore);
+          const score = rawScore <= 1 ? Math.round(rawScore * 100) : Math.round(rawScore);
+          const priceUsd = toNumber(s.priceUsd ?? s.currentPrice);
+          const change24h = toNumber(s.change24h ?? s.priceChange24h);
           const volume24h = toNumber(s.volume24h);
-          const mcap = toNumber(s.marketCap);
+          const mcap = toNumber(s.mcap ?? s.marketCap);
           const signals = Array.isArray((s as { signals?: unknown }).signals)
             ? ((s as { signals: unknown[] }).signals.filter(
                 (x): x is string => typeof x === 'string',
@@ -108,13 +127,15 @@ export default function SignalsPage() {
             volume24h,
             mcap,
             signals,
-            updatedAt: new Date().toISOString(),
+            updatedAt: toText(s.updatedAt, new Date().toISOString()),
           };
         });
         setSignals(mapped);
+      } else {
+        setSignals([]);
       }
     } catch {
-      // keep previous
+      setSignals([]);
     } finally {
       setLoading(false);
       setLastUpdated(new Date().toLocaleTimeString());
