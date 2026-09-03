@@ -14,6 +14,7 @@ const {
   RATE_LIMIT_PUBLIC_WINDOW_MS,
   RATE_LIMIT_PROTECTED_MAX,
   RATE_LIMIT_PROTECTED_WINDOW_MS,
+  ENABLE_KILL_SWITCH,
   SESSION_TTL_SECONDS
 } = require('./config');
 const { createSessionToken, verifySessionToken, tokenFromRequest, sessionCookie, clearSessionCookie } = require('./auth');
@@ -482,6 +483,15 @@ function createApp() {
       }
 
       if (req.method === 'POST' && reqUrl.pathname === '/api/protected/operator/kill-switch') {
+        if (!ENABLE_KILL_SWITCH) {
+          return json(res, 503, {
+            ok: false,
+            error: 'service_unavailable',
+            reasonCode: 'KILL_SWITCH_DISABLED',
+            message: 'Kill switch is disabled by configuration.'
+          });
+        }
+
         const body = await readBody(req).catch((err) => err);
         if (body instanceof Error) {
           if (body.code === 'PAYLOAD_TOO_LARGE') return json(res, 413, { error: 'payload_too_large' });

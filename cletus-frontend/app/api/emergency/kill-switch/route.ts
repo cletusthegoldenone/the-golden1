@@ -26,6 +26,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorised' }, { status: 401 });
   }
 
+  const killSwitchEnabled = process.env.ENABLE_KILL_SWITCH !== 'false';
+  if (!killSwitchEnabled) {
+    return NextResponse.json(
+      { error: 'Kill switch disabled by configuration' },
+      { status: 503 },
+    );
+  }
+
   const isLive = process.env.ENABLE_LIVE_TRADING === 'true';
   const hasKeypair = loadTradingKeypair() !== null;
   const isDryRun = !isLive || !hasKeypair;

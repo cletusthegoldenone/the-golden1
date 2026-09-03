@@ -75,6 +75,7 @@ export async function GET() {
 
     config: {
       liveTrading: process.env.ENABLE_LIVE_TRADING === 'true',
+      killSwitchEnabled: process.env.ENABLE_KILL_SWITCH !== 'false',
       hasPrivateKey: !!process.env.TRADING_WALLET_PRIVATE_KEY && process.env.TRADING_WALLET_PRIVATE_KEY !== 'your_base58_private_key_here',
       hasJupiterKey: !!process.env.JUPITER_API_KEY && process.env.JUPITER_API_KEY !== 'your_jupiter_api_key_here',
       hasRugcheckKey: !!process.env.RUGCHECK_API_KEY && process.env.RUGCHECK_API_KEY !== 'your_rugcheck_api_key_here',
