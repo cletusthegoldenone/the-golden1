@@ -48,6 +48,7 @@ function formatPrice(n: number) {
 export default function TokenChartPage() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<TokenResult[]>([]);
+  const [hasSearched, setHasSearched] = useState(false);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<TokenResult | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
@@ -62,20 +63,47 @@ export default function TokenChartPage() {
     const trimmed = q.trim();
     if (trimmed.length < 1) {
       setResults([]);
+      setHasSearched(false);
       setSearching(false);
+      setError('');
       return;
     }
     setSearching(true);
     setError('');
+    setHasSearched(true);
     try {
-      // Wire to backend / CoinGecko / Jupiter token list:
-      // GET /api/tokens/search?q=...
-      const res = await fetch(
-        `/api/tokens/search?q=${encodeURIComponent(trimmed)}`
-      );
+      const res = await fetch(`/api/tokens?q=${encodeURIComponent(trimmed)}`);
       if (res.ok) {
         const data = await res.json();
-        setResults(Array.isArray(data.tokens) ? data.tokens : data.results ?? []);
+        const list = Array.isArray(data.tokens)
+          ? data.tokens
+          : Array.isArray(data.results)
+            ? data.results
+            : [];
+        const normalized = list
+          .map((item: Partial<TokenResult>) => {
+            const symbol = typeof item.symbol === 'string' ? item.symbol.trim() : '';
+            const name = typeof item.name === 'string' ? item.name.trim() : '';
+            const address = typeof item.address === 'string' ? item.address.trim() : '';
+            const id = typeof item.id === 'string' ? item.id.trim() : address || symbol || name;
+            if (!id || (!symbol && !name && !address)) return null;
+            return {
+              id,
+              symbol: symbol || name || address.slice(0, 6),
+              name: name || symbol || 'Unknown token',
+              address,
+              image: typeof item.image === 'string' ? item.image : undefined,
+              priceUsd: typeof item.priceUsd === 'number' ? item.priceUsd : undefined,
+              change24h: typeof item.change24h === 'number' ? item.change24h : undefined,
+              volume24h: typeof item.volume24h === 'number' ? item.volume24h : undefined,
+              mcap: typeof item.mcap === 'number' ? item.mcap : undefined,
+            } satisfies TokenResult;
+          })
+          .filter((item: TokenResult | null): item is TokenResult => Boolean(item));
+        setResults(normalized);
+        if (normalized.length === 0) {
+          setError('No token matches found. Try symbol or mint address.');
+        }
       } else {
         setResults([]);
         setError('Search unavailable. Try again.');
@@ -95,32 +123,34 @@ export default function TokenChartPage() {
   };
 
   const loadChart = useCallback(async (token: TokenResult, r: typeof range) => {
+    const symbol = (token.symbol || '').replace(/^\$/, '').toUpperCase();
+    if (!symbol) {
+      setCandles([]);
+      setError('Token symbol missing. Pick a different token.');
+      return;
+    }
+
     setChartLoading(true);
     setError('');
     try {
-      // Wire to CoinGecko / Birdeye / your API:
-      // GET /api/tokens/chart?id=...&range=1D
       const params = new URLSearchParams({
-        range: r,
-        quote: 'USDC',
+        pair: `${symbol}/USDT`,
+        timeframe:
+          r === '1H' ? '1m' : r === '4H' ? '5m' : r === '1D' ? '15m' : r === '1W' ? '1h' : '4h',
+        count: r === '1M' ? '180' : r === '1W' ? '140' : '120',
       });
-      if (token.id) params.set('id', token.id);
-      if (token.address) params.set('address', token.address);
-      if (token.symbol) params.set('symbol', token.symbol);
 
-      const res = await fetch(`/api/tokens/chart?${params}`);
+      const res = await fetch(`/api/prices?${params}`);
       if (res.ok) {
         const data = await res.json();
         setCandles(Array.isArray(data.candles) ? data.candles : []);
-        if (data.priceUsd != null) {
+        if (data.currentPrice != null || data.change24h != null) {
           setSelected((prev) =>
             prev
               ? {
                   ...prev,
-                  priceUsd: data.priceUsd,
+                  priceUsd: typeof data.currentPrice === 'number' ? data.currentPrice : prev.priceUsd,
                   change24h: data.change24h ?? prev.change24h,
-                  volume24h: data.volume24h ?? prev.volume24h,
-                  mcap: data.mcap ?? prev.mcap,
                 }
               : prev
           );
@@ -263,6 +293,12 @@ export default function TokenChartPage() {
                   </li>
                 ))}
               </ul>
+            )}
+            {hasSearched && !searching && results.length === 0 && (
+            <div className="mt-2 rounded-xl border border-white/15 bg-[#0a0a0a] px-4 py-3 text-xs text-white/50">
+              No token results yet. Try a ticker like <span className="text-white/70">BONK</span>{' '}
+              or paste a mint address.
+            </div>
             )}
           </div>
 

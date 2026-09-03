@@ -31,9 +31,22 @@ interface FormattedToken {
   changePositive: boolean;
 }
 
+interface SearchTokenResult {
+  id: string;
+  symbol: string;
+  name: string;
+  address: string;
+  priceUsd?: number;
+  change24h?: number;
+  volume24h?: number;
+  mcap?: number;
+}
+
 // Simple in-memory cache
 let cachedData: { tokens: FormattedToken[]; isLive: boolean; timestamp: number } | null = null;
 const CACHE_TTL_MS = 15_000;
+const SEARCH_CACHE_TTL_MS = 10_000;
+const searchCache = new Map<string, { tokens: SearchTokenResult[]; isLive: boolean; timestamp: number }>();
 
 const FALLBACK_TOKENS: FormattedToken[] = [
   {
@@ -237,8 +250,96 @@ async function fetchLiveTokens(): Promise<FormattedToken[]> {
   });
 }
 
-export async function GET() {
+async function fetchSearchTokens(query: string): Promise<SearchTokenResult[]> {
+  const res = await fetch(
+    `https://api.dexscreener.com/latest/dex/search/?q=${encodeURIComponent(query)}`,
+    {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(5000),
+    }
+  );
+
+  if (!res.ok) throw new Error(`Search API error: ${res.status}`);
+
+  const payload = (await res.json()) as { pairs?: DexScreenerPair[] };
+  const pairs = Array.isArray(payload.pairs) ? payload.pairs : [];
+
+  const seen = new Set<string>();
+  return pairs
+    .filter((pair) => {
+      const address = pair.baseToken?.address?.trim();
+      const symbol = pair.baseToken?.symbol?.trim();
+      return pair.chainId === 'solana' && Boolean(address) && Boolean(symbol);
+    })
+    .sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))
+    .filter((pair) => {
+      const address = pair.baseToken.address;
+      if (seen.has(address)) return false;
+      seen.add(address);
+      return true;
+    })
+    .slice(0, 20)
+    .map((pair) => {
+      const priceUsd = Number.parseFloat(pair.priceUsd ?? '');
+      const mcap = pair.marketCap ?? pair.fdv;
+      const volume24h = pair.volume?.h24;
+      const change24h = pair.priceChange?.h24;
+      return {
+        id: pair.baseToken.address,
+        symbol: pair.baseToken.symbol.toUpperCase(),
+        name: pair.baseToken.name,
+        address: pair.baseToken.address,
+        priceUsd: Number.isFinite(priceUsd) ? priceUsd : undefined,
+        change24h,
+        volume24h,
+        mcap: typeof mcap === 'number' && Number.isFinite(mcap) ? mcap : undefined,
+      };
+    });
+}
+
+function fallbackSearchTokens(query: string): SearchTokenResult[] {
+  const q = query.trim().toLowerCase();
+  const fallback = FALLBACK_TOKENS
+    .map((token) => ({
+      id: token.address || token.name.replace('$', ''),
+      symbol: token.name.replace(/^\$/, ''),
+      name: token.fullName,
+      address: token.address,
+    }))
+    .filter((token) => {
+      if (!q) return true;
+      return (
+        token.symbol.toLowerCase().includes(q) ||
+        token.name.toLowerCase().includes(q) ||
+        token.address.toLowerCase().includes(q)
+      );
+    });
+  return fallback.slice(0, 10);
+}
+
+export async function GET(request: Request) {
+  const url = new URL(request.url);
+  const query = (url.searchParams.get('q') ?? '').trim();
   const now = Date.now();
+
+  if (query.length > 0) {
+    const key = query.toLowerCase();
+    const cached = searchCache.get(key);
+    if (cached && now - cached.timestamp < SEARCH_CACHE_TTL_MS) {
+      return NextResponse.json(cached);
+    }
+
+    try {
+      const tokens = await fetchSearchTokens(query);
+      const payload = { tokens, isLive: true, timestamp: now };
+      searchCache.set(key, payload);
+      return NextResponse.json(payload);
+    } catch {
+      const payload = { tokens: fallbackSearchTokens(query), isLive: false, timestamp: now };
+      searchCache.set(key, payload);
+      return NextResponse.json(payload);
+    }
+  }
 
   if (cachedData && now - cachedData.timestamp < CACHE_TTL_MS) {
     return NextResponse.json(cachedData);
