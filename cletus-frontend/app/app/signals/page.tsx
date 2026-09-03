@@ -25,6 +25,38 @@ type Signal = {
   updatedAt: string;
 };
 
+type ApiSignal = Partial<{
+  id: string;
+  tokenName: string;
+  direction: 'LONG' | 'SHORT' | string;
+  compositeScore: number;
+  currentPrice: number;
+  priceChange24h: number;
+  volume24h: number;
+  marketCap: number;
+  strength: 'WEAK' | 'MODERATE' | 'STRONG' | 'EXTREME';
+}>;
+
+function toNumber(value: unknown, fallback = 0) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function toSide(value: unknown): 'LONG' | 'SHORT' {
+  return value === 'SHORT' ? 'SHORT' : 'LONG';
+}
+
+function deriveTags(s: ApiSignal) {
+  const tags: string[] = [];
+  const score = toNumber(s.compositeScore);
+  const change24h = toNumber(s.priceChange24h);
+
+  if (s.strength) tags.push(s.strength);
+  if (score >= 0.75) tags.push('High Conviction');
+  if (change24h >= 10) tags.push('Momentum');
+  if (change24h <= -5) tags.push('Mean Reversion');
+  return tags;
+}
+
 function formatUsd(n: number) {
   if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
   if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
@@ -50,7 +82,36 @@ export default function SignalsPage() {
       const res = await fetch('/api/signals?quote=USDC');
       if (res.ok) {
         const data = await res.json();
-        setSignals(data.signals ?? []);
+        const mapped: Signal[] = (data.signals ?? []).map((s: ApiSignal, i: number) => {
+          const base = (s.tokenName ?? 'UNKNOWN').toUpperCase();
+          const side = toSide(s.direction);
+          const score = Math.round(toNumber(s.compositeScore) * 100);
+          const priceUsd = toNumber(s.currentPrice);
+          const change24h = toNumber(s.priceChange24h);
+          const volume24h = toNumber(s.volume24h);
+          const mcap = toNumber(s.marketCap);
+          const signals = Array.isArray((s as { signals?: unknown }).signals)
+            ? ((s as { signals: unknown[] }).signals.filter(
+                (x): x is string => typeof x === 'string',
+              ) ?? [])
+            : deriveTags(s);
+
+          return {
+            id: s.id ?? `${base}-${i}`,
+            pair: `${base}/USDC`,
+            base,
+            quote: 'USDC',
+            side,
+            score,
+            priceUsd,
+            change24h,
+            volume24h,
+            mcap,
+            signals,
+            updatedAt: new Date().toISOString(),
+          };
+        });
+        setSignals(mapped);
       }
     } catch {
       // keep previous
@@ -186,11 +247,11 @@ export default function SignalsPage() {
                       </td>
                       <td
                         className={`py-3 px-4 text-right font-semibold ${
-                          s.change24h >= 0 ? 'text-emerald-400' : 'text-red-400'
+                          (s.change24h ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
                         }`}
                       >
-                        {s.change24h >= 0 ? '+' : ''}
-                        {s.change24h.toFixed(2)}%
+                        {(s.change24h ?? 0) >= 0 ? '+' : ''}
+                        {(s.change24h ?? 0).toFixed(2)}%
                       </td>
                       <td className="py-3 px-4 text-right text-white/70">
                         {formatUsd(s.volume24h)}
@@ -212,7 +273,7 @@ export default function SignalsPage() {
                         </span>
                       </td>
                       <td className="py-3 px-4 text-xs text-white/50">
-                        {s.signals.join(' · ')}
+                        {(s.signals ?? []).join(' · ')}
                       </td>
                     </tr>
                   ))}
