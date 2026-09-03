@@ -32,7 +32,7 @@ function ScoreBar({ label, value }: { label: string; value: number }) {
         <div
           className="h-full rounded-full transition-all duration-700"
           style={{
-            width: `${value * 100}%`,
+            width: `${safeValue * 100}%`,
             background:
               safeValue > 0.7
                 ? '#00d4aa'
@@ -403,7 +403,7 @@ export default function TradingSignals() {
               stopLoss: toNumber(s.stopLoss, currentPrice * 0.92),
               takeProfit: toNumber(s.takeProfit, currentPrice * 1.2),
             };
-          })),
+          }),
         );
         setIsLive(data.isLive ?? false);
       }
