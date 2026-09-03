@@ -1,15 +1,16 @@
 # Paste into Railway → Web service (Root Directory = cletus-frontend)
 # Do NOT set PORT
 
+NODE_VERSION=20
 NODE_ENV=production
+NEXT_PUBLIC_HELIUS_RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_HELIUS_KEY
+# If proxying unmatched /api/* routes from Next to the API service:
 API_BASE_URL=https://YOUR-API-SERVICE.up.railway.app
-# Optional client-exposed URL for direct browser calls (not required by Next API proxy):
-# NEXT_PUBLIC_API_URL=https://YOUR-API-SERVICE.up.railway.app
 
-HELIUS_API_KEY=
-JUPITER_API_KEY=
+# AI routes only:
 GEMINI_API_KEY=
-RUGCHECK_API_KEY=
 
-# Optional if Next API routes use Postgres:
-# DATABASE_URL=${{Postgres.DATABASE_URL}}
+# DB guidance:
+# - If using Postgres, set a private DATABASE_URL in the service that connects to Postgres.
+# - Do not set PERSISTENCE_ADAPTER on the web service.
+# - Use PERSISTENCE_ADAPTER=file only on the API service when not using Postgres.

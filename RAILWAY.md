@@ -85,19 +85,23 @@ restartPolicyMaxRetries = 3
 **Variables (Web service)** — do **not** set `PORT`:
 
 ```bash
+NODE_VERSION=20
 NODE_ENV=production
+NEXT_PUBLIC_HELIUS_RPC_URL=https://mainnet.helius-rpc.com/?api-key=<helius-key>
 # Server-side API proxy target for unmatched /api/* routes in Next
+# (set only if proxying)
 API_BASE_URL=https://<your-api-service>.up.railway.app
 # Optional client-exposed URL for direct browser calls
 # NEXT_PUBLIC_API_URL=https://<your-api-service>.up.railway.app
 
-HELIUS_API_KEY=
-JUPITER_API_KEY=
+# AI routes only
 GEMINI_API_KEY=
-RUGCHECK_API_KEY=
-# If frontend APIs use Postgres directly:
-DATABASE_URL=${{Postgres.DATABASE_URL}}
 ```
+
+DB guidance:
+- If using Postgres, set a **private** `DATABASE_URL` only on the service that needs DB access.
+- Do not set `PERSISTENCE_ADAPTER` on the web service.
+- For the API service, use `PERSISTENCE_ADAPTER=file` when not using Postgres.
 
 `package.json` already has:
 - `"start": "next start -p ${PORT:-3000}"`
