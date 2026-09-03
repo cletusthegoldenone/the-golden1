@@ -17,7 +17,8 @@ PERSISTENCE_ADAPTER=file
 # PERSISTENCE_ADAPTER=postgres
 # DATABASE_URL is auto-set when you attach Railway Postgres
 
-HELIUS_API_KEY=
+SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+SOLANA_SEND_RPC_URL=https://api.mainnet-beta.solana.com
 JUPITER_API_KEY=
 RUGCHECK_API_KEY=
 GEMINI_API_KEY=

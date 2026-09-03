@@ -6,7 +6,7 @@ You have **two apps** in one repo. Deploy them as **two Railway services** (reco
 
 | Service | Root directory | What it is |
 |---------|----------------|------------|
-| **API** | `.` (repo root) | Node policy server `src/server.js` — legal, session, trade auth, tax, Helius send |
+| **API** | `.` (repo root) | Node policy server `src/server.js` — legal, session, trade auth, tax, Solana RPC send |
 | **Web** | `cletus-frontend` | Next.js 14 UI + App Router API routes (signals, AI, trade, etc.). **Do not use `.` for this service.** |
 
 ---
@@ -42,7 +42,8 @@ AUTH_PROVIDER=wallet_challenge
 PERSISTENCE_ADAPTER=postgres
 # DATABASE_URL is auto-injected if Postgres plugin is attached to this service
 
-HELIUS_API_KEY=
+SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+SOLANA_SEND_RPC_URL=https://api.mainnet-beta.solana.com
 JUPITER_API_KEY=
 RUGCHECK_API_KEY=
 GEMINI_API_KEY=
@@ -87,7 +88,7 @@ restartPolicyMaxRetries = 3
 ```bash
 NODE_VERSION=20
 NODE_ENV=production
-NEXT_PUBLIC_HELIUS_RPC_URL=https://mainnet.helius-rpc.com/?api-key=<helius-key>
+NEXT_PUBLIC_SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
 # Server-side API proxy target for unmatched /api/* routes in Next
 # (set only if proxying)
 API_BASE_URL=https://<your-api-service>.up.railway.app

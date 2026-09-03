@@ -10,7 +10,9 @@ import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
 import '@solana/wallet-adapter-react-ui/styles.css';
 
 const SOLANA_RPC =
-  process.env.NEXT_PUBLIC_HELIUS_RPC_URL ?? 'https://api.mainnet-beta.solana.com';
+  process.env.NEXT_PUBLIC_SOLANA_RPC_URL
+  ?? process.env.NEXT_PUBLIC_HELIUS_RPC_URL
+  ?? 'https://api.mainnet-beta.solana.com';
 
 // Cast adapters to satisfy React 18 JSX types
 const ConnProvider = ConnectionProvider as React.ComponentType<{

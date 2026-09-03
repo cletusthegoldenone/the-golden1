@@ -21,7 +21,7 @@ const { createSessionToken, verifySessionToken, tokenFromRequest, sessionCookie,
 const { createAuthProvider, AuthProviderError, walletIdentity } = require('./authProvider');
 const { PersistenceError } = require('./persistence');
 const { RateLimiter } = require('./rateLimit');
-const { sendTransactionViaHelius } = require('./heliusSend');
+const { sendTransactionViaRpc } = require('./rpcSend');
 const { auditToken } = require('./rugcheck');
 const { handleChat } = require('./chat');
 
@@ -137,7 +137,7 @@ function parseOptionalPositiveNumber(value) {
 }
 
 function legalGateHtml() {
-  return `<!doctype html><html><head><title>The Golden1 Legal Gate</title><style>body{margin:0;font-family:sans-serif;background:#fff;color:#111}main{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}section{max-width:720px}h1{font-size:2rem}p.notice{background:#fffbe6;border:1px solid #f0c040;padding:1rem;border-radius:4px}</style></head><body><main><section><h1>Legal Acceptance Required</h1><p>You must accept Terms, Risk Disclaimer, Trading Authorization Disclosures, and Privacy Acknowledgement before app access.</p><p class="notice"><strong>Infrastructure &amp; Fee Disclosure:</strong> The Golden1 is operated using paid infrastructure (Helius RPC, Jupiter API, Gemini AI, RugCheck.xyz token safety audits, Railway, PostgreSQL). A portion of on-chain transaction rebates and a 0.5% routing fee on trades are directed to the operator wallet to offset these costs. All trades are automatically scanned against RugCheck.xyz before execution to protect you from known rug-pulls and unsafe tokens. This is a condition of use. By accepting, you acknowledge and consent to this fee structure and safety scanning.</p></section></main></body></html>`;
+  return `<!doctype html><html><head><title>The Golden1 Legal Gate</title><style>body{margin:0;font-family:sans-serif;background:#fff;color:#111}main{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}section{max-width:720px}h1{font-size:2rem}p.notice{background:#fffbe6;border:1px solid #f0c040;padding:1rem;border-radius:4px}</style></head><body><main><section><h1>Legal Acceptance Required</h1><p>You must accept Terms, Risk Disclaimer, Trading Authorization Disclosures, and Privacy Acknowledgement before app access.</p><p class="notice"><strong>Infrastructure &amp; Fee Disclosure:</strong> The Golden1 is operated using paid infrastructure (Solana RPC, Jupiter API, Gemini AI, RugCheck.xyz token safety audits, Railway, PostgreSQL). A portion of on-chain transaction rebates and a 0.5% routing fee on trades are directed to the operator wallet to offset these costs. All trades are automatically scanned against RugCheck.xyz before execution to protect you from known rug-pulls and unsafe tokens. This is a condition of use. By accepting, you acknowledge and consent to this fee structure and safety scanning.</p></section></main></body></html>`;
 }
 
 function verifyAuthContext(reqUrl, req) {
@@ -607,9 +607,9 @@ function createApp() {
 
         let result;
         try {
-          result = await sendTransactionViaHelius(serializedTransaction, { skipPreflight, preflightCommitment });
+          result = await sendTransactionViaRpc(serializedTransaction, { skipPreflight, preflightCommitment });
         } catch (err) {
-          return json(res, 502, { error: 'helius_send_failed', detail: err.message });
+          return json(res, 502, { error: 'rpc_send_failed', detail: err.message });
         }
 
         return json(res, 200, {
