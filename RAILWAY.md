@@ -72,7 +72,7 @@ Use `cletus-frontend/railway.toml` (or paste):
 ```toml
 [build]
 builder = "nixpacks"
-buildCommand = "npm install --omit=optional --ignore-scripts && npm run build"
+buildCommand = "npm install --omit=optional --ignore-scripts && npm run build && mkdir -p .next/standalone/.next && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/"
 
 [deploy]
 startCommand = "node .next/standalone/server.js"
