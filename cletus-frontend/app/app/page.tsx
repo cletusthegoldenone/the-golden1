@@ -91,6 +91,7 @@ export default function AppDashboardPage() {
   const [stats, setStats] = useState<UserStats>(EMPTY_STATS);
   const [loading, setLoading] = useState(true);
   const [identity, setIdentity] = useState<string | null>(null);
+  const [hasSession, setHasSession] = useState(true);
 
   const load = useCallback(async () => {
     try {
@@ -99,6 +100,7 @@ export default function AppDashboardPage() {
       const res = await fetch('/api/protected/stats', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
+        setHasSession(true);
         setStats({
           pnl24h: Number(data.pnl24h) || 0,
           pnl24hPercent: Number(data.pnl24hPercent) || 0,
@@ -112,10 +114,16 @@ export default function AppDashboardPage() {
           daysRemaining: data.daysRemaining ?? 30,
         });
         if (data.identity) setIdentity(data.identity);
+      } else if (res.status === 401) {
+        setHasSession(false);
+        setIdentity(null);
+        setStats({ ...EMPTY_STATS, trialActive: false, daysRemaining: 0 });
       }
       // If 401/empty — keep zeros (new user, no trades yet)
     } catch {
-      // keep empty personal stats
+      setHasSession(false);
+      setIdentity(null);
+      setStats({ ...EMPTY_STATS, trialActive: false, daysRemaining: 0 });
     } finally {
       setLoading(false);
     }
@@ -162,6 +170,25 @@ export default function AppDashboardPage() {
       <main className="flex-1 px-4 sm:px-6 py-6">
         <div className="max-w-3xl mx-auto space-y-6">
           {/* Trial strip */}
+          {!hasSession && !loading && (
+            <div className="rounded-2xl border border-yellow-400/30 bg-yellow-500/10 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold text-yellow-300 uppercase tracking-wider">
+                  Trial not started
+                </div>
+                <p className="text-sm text-white/70 mt-0.5">
+                  Register in Tax Center to start your trial and unlock dashboard access.
+                </p>
+              </div>
+              <Link
+                href="/tax"
+                className="shrink-0 px-5 py-2.5 rounded-full text-sm font-semibold bg-yellow-300 text-black text-center hover:bg-yellow-200 transition-colors"
+              >
+                Go to Tax Center
+              </Link>
+            </div>
+          )}
+
           {stats.trialActive && (
             <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>

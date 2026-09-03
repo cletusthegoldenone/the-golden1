@@ -20,8 +20,8 @@ export default function LegalEntryPage() {
     setSubmitting(true);
 
     try {
-      // Wire to Golden1: POST /api/legal/accept
-      // await fetch('/api/legal/accept', { method: 'POST', ... });
+      const acceptedAt = new Date().toISOString();
+      localStorage.setItem('cletusLegalAcceptedAt', acceptedAt);
 
       router.push('/tax');
     } catch {
