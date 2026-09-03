@@ -3,6 +3,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { TradingSignal } from '@/types';
 
+function toNumber(value: unknown, fallback = 0) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
 function StrengthBadge({ strength }: { strength: TradingSignal['strength'] }) {
   const config = {
     EXTREME: { color: 'bg-trading-purple/20 text-trading-purple border-trading-purple/40', dot: 'bg-trading-purple' },
@@ -20,6 +24,7 @@ function StrengthBadge({ strength }: { strength: TradingSignal['strength'] }) {
 }
 
 function ScoreBar({ label, value }: { label: string; value: number }) {
+  const safeValue = toNumber(value);
   return (
     <div className="flex items-center gap-2">
       <span className="text-xs text-gray-500 w-28 shrink-0">{label}</span>
@@ -29,16 +34,16 @@ function ScoreBar({ label, value }: { label: string; value: number }) {
           style={{
             width: `${value * 100}%`,
             background:
-              value > 0.7
+              safeValue > 0.7
                 ? '#00d4aa'
-                : value > 0.4
+                : safeValue > 0.4
                 ? '#ffd43b'
                 : '#ff4757',
           }}
         />
       </div>
       <span className="text-xs font-mono text-gray-400 w-8 text-right">
-        {(value * 100).toFixed(0)}%
+        {(safeValue * 100).toFixed(0)}%
       </span>
     </div>
   );
@@ -56,16 +61,18 @@ function SignalCard({
   onExecute: (signal: TradingSignal) => void;
 }) {
   const formatNum = (n: number) => {
-    if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
-    if (n >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
-    return `$${n.toFixed(2)}`;
+    const safe = toNumber(n);
+    if (safe >= 1e6) return `$${(safe / 1e6).toFixed(1)}M`;
+    if (safe >= 1e3) return `$${(safe / 1e3).toFixed(1)}K`;
+    return `$${safe.toFixed(2)}`;
   };
 
   const formatPrice = (p: number) => {
-    if (p < 0.0001) return p.toExponential(3);
-    if (p < 0.01) return p.toFixed(6);
-    if (p < 1) return p.toFixed(4);
-    return p.toFixed(3);
+    const safe = toNumber(p);
+    if (safe < 0.0001) return safe.toExponential(3);
+    if (safe < 0.01) return safe.toFixed(6);
+    if (safe < 1) return safe.toFixed(4);
+    return safe.toFixed(3);
   };
 
   const timeSince = (ts: number) => {
@@ -148,7 +155,7 @@ function SignalCard({
               }`}
             >
               {signal.priceChange24h >= 0 ? '+' : ''}
-              {signal.priceChange24h.toFixed(1)}%
+              {(signal.priceChange24h ?? 0).toFixed(1)}%
             </div>
           </div>
           <div>
@@ -355,10 +362,47 @@ export default function TradingSignals() {
           isLive?: boolean;
         };
         setSignals(
-          (data.signals ?? []).map((s) => ({
-            ...s,
-            stopLoss: s.stopLoss ?? s.currentPrice * 0.92,
-            takeProfit: s.takeProfit ?? s.currentPrice * 1.2,
+          (data.signals ?? []).map((s) => {
+            const currentPrice = toNumber(s.currentPrice);
+            const marketCap = toNumber(s.marketCap);
+            const volume24h = toNumber(s.volume24h);
+            const compositeScore = toNumber(s.compositeScore);
+            const priceChange24h = toNumber(s.priceChange24h);
+            const riskReward = toNumber(s.riskReward, 2);
+            const timestamp = toNumber(s.timestamp, Date.now());
+            const breakdown = s.breakdown ?? {
+              volumeSpike: 0,
+              momentum: 0,
+              breakout: 0,
+              rsiScore: 0,
+              macdCross: 0,
+              holderGrowth: 0,
+              liquidityScore: 0,
+              socialSentiment: 0,
+            };
+
+            return {
+              ...s,
+              currentPrice,
+              marketCap,
+              volume24h,
+              compositeScore,
+              priceChange24h,
+              riskReward,
+              timestamp,
+              breakdown: {
+                volumeSpike: toNumber(breakdown.volumeSpike),
+                momentum: toNumber(breakdown.momentum),
+                breakout: toNumber(breakdown.breakout),
+                rsiScore: toNumber(breakdown.rsiScore),
+                macdCross: toNumber(breakdown.macdCross),
+                holderGrowth: toNumber(breakdown.holderGrowth),
+                liquidityScore: toNumber(breakdown.liquidityScore),
+                socialSentiment: toNumber(breakdown.socialSentiment),
+              },
+              stopLoss: toNumber(s.stopLoss, currentPrice * 0.92),
+              takeProfit: toNumber(s.takeProfit, currentPrice * 1.2),
+            };
           })),
         );
         setIsLive(data.isLive ?? false);
