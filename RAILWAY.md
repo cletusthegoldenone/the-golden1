@@ -86,8 +86,10 @@ restartPolicyMaxRetries = 3
 
 ```bash
 NODE_ENV=production
-# Public URL of the API service (Railway internal or public)
-NEXT_PUBLIC_API_URL=https://<your-api-service>.up.railway.app
+# Server-side API proxy target for unmatched /api/* routes in Next
+API_BASE_URL=https://<your-api-service>.up.railway.app
+# Optional client-exposed URL for direct browser calls
+# NEXT_PUBLIC_API_URL=https://<your-api-service>.up.railway.app
 
 HELIUS_API_KEY=
 JUPITER_API_KEY=
@@ -107,7 +109,7 @@ DATABASE_URL=${{Postgres.DATABASE_URL}}
 ## 4) Networking
 
 1. Generate domain for **Web** (public users).
-2. Generate domain for **API** (or use private networking + `NEXT_PUBLIC_API_URL`).
+2. Generate domain for **API** (or use private networking + `API_BASE_URL`).
 3. Optional: custom domain `cletusai.xyz` → point to Web service.
 
 ---
