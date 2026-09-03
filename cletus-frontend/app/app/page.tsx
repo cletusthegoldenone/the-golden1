@@ -94,6 +94,8 @@ export default function AppDashboardPage() {
   const [hasSession, setHasSession] = useState(true);
 
   const load = useCallback(async () => {
+    setLoading(true);
+
     try {
       // Personal stats for the logged-in user only
       // Wire: GET /api/protected/stats or /api/protected/pnl
@@ -114,16 +116,16 @@ export default function AppDashboardPage() {
           daysRemaining: data.daysRemaining ?? 30,
         });
         if (data.identity) setIdentity(data.identity);
+        else setIdentity(null);
       } else if (res.status === 401) {
         setHasSession(false);
         setIdentity(null);
         setStats({ ...EMPTY_STATS, trialActive: false, daysRemaining: 0 });
+      } else {
+        setHasSession(true);
       }
-      // If 401/empty — keep zeros (new user, no trades yet)
     } catch {
-      setHasSession(false);
-      setIdentity(null);
-      setStats({ ...EMPTY_STATS, trialActive: false, daysRemaining: 0 });
+      setHasSession(true);
     } finally {
       setLoading(false);
     }
@@ -174,17 +176,17 @@ export default function AppDashboardPage() {
             <div className="rounded-2xl border border-yellow-400/30 bg-yellow-500/10 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <div className="text-xs font-semibold text-yellow-300 uppercase tracking-wider">
-                  Trial not started
+                  Registration required
                 </div>
                 <p className="text-sm text-white/70 mt-0.5">
-                  Register in Tax Center to start your trial and unlock dashboard access.
+                  Register / connect to see your PnL.
                 </p>
               </div>
               <Link
                 href="/tax"
                 className="shrink-0 px-5 py-2.5 rounded-full text-sm font-semibold bg-yellow-300 text-black text-center hover:bg-yellow-200 transition-colors"
               >
-                Go to Tax Center
+                Register now
               </Link>
             </div>
           )}
@@ -274,7 +276,7 @@ export default function AppDashboardPage() {
             </div>
           </section>
 
-          {!loading && stats.totalTrades === 0 && (
+          {!loading && hasSession && stats.totalTrades === 0 && (
             <div className="rounded-2xl border border-white/10 bg-[#121212] p-6 text-center text-sm text-white/45">
               No trades yet for your account. Numbers stay at zero until you trade — then this
               dashboard tracks <strong className="text-white/60">your</strong> PnL only.
