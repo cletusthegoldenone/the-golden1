@@ -7,7 +7,7 @@ You have **two apps** in one repo. Deploy them as **two Railway services** (reco
 | Service | Root directory | What it is |
 |---------|----------------|------------|
 | **API** | `.` (repo root) | Node policy server `src/server.js` — legal, session, trade auth, tax, Helius send |
-| **Web** | `cletus-frontend` | Next.js 14 UI + App Router API routes (signals, AI, trade, etc.) |
+| **Web** | `cletus-frontend` | Next.js 14 UI + App Router API routes (signals, AI, trade, etc.). **Do not use `.` for this service.** |
 
 ---
 
@@ -65,7 +65,7 @@ openssl rand -hex 64   # SESSION_SECRET
 
 ## 3) Service B — Web (Next.js)
 
-**Settings → Root Directory:** `cletus-frontend`
+**Settings → Root Directory:** `cletus-frontend` (do not set `.` for website service)
 
 Use `cletus-frontend/railway.toml` (or paste):
 
