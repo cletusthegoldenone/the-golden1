@@ -1,5 +1,5 @@
 /**
- * Self-healing Helius RPC client.
+ * Self-healing Solana RPC client.
  *
  * Tracks consecutive RPC failures and automatically escalates priority fees
  * to keep transactions landing during congestion. Recovers back to baseline
@@ -32,17 +32,23 @@ let currentPriorityFee = BASELINE_PRIORITY_FEE_LAMPORTS;
 
 /**
  * Returns the best available Solana RPC URL.
- * Prefers HELIUS_API_KEY (server-only secret) to construct the URL, then falls
- * back to NEXT_PUBLIC_HELIUS_RPC_URL, then the public mainnet endpoint.
+ * Prefers private SOLANA_RPC_URL, then the public Solana RPC URL, then legacy
+ * Helius variables, then the public mainnet endpoint.
  */
 export function getRpcUrl(): string {
+  const privateUrl = process.env.SOLANA_RPC_URL;
+  if (privateUrl) return privateUrl;
+
+  const publicSolanaUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
+  if (publicSolanaUrl) return publicSolanaUrl;
+
   const apiKey = process.env.HELIUS_API_KEY;
   if (apiKey && apiKey !== 'your_helius_api_key_here') {
     return `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
   }
 
-  const publicUrl = process.env.NEXT_PUBLIC_HELIUS_RPC_URL;
-  if (publicUrl) return publicUrl;
+  const legacyHeliusUrl = process.env.NEXT_PUBLIC_HELIUS_RPC_URL;
+  if (legacyHeliusUrl) return legacyHeliusUrl;
 
   const fallback = process.env.RPC_URL;
   if (fallback) return fallback;
@@ -107,7 +113,7 @@ export function recordRpcFailure(): void {
 // ── JSON-RPC helper ───────────────────────────────────────────────────────────
 
 /**
- * Execute a Solana JSON-RPC call against the Helius endpoint.
+ * Execute a Solana JSON-RPC call against the configured Solana RPC endpoint.
  * Records success/failure for self-healing.
  */
 export async function rpcCall<T>(method: string, params: unknown[]): Promise<T> {

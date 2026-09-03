@@ -324,7 +324,7 @@ export default function Dashboard({ onNavigate }: DashboardProps) {
         </h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
-            { label: 'Helius RPC', status: 'Operational', ok: true },
+            { label: 'Solana RPC', status: 'Operational', ok: true },
             { label: 'Gemini AI', status: 'Connected', ok: true },
             { label: 'Signal Engine', status: 'Active', ok: true },
             { label: 'Risk Manager', status: 'Monitoring', ok: true },

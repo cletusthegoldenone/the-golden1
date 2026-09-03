@@ -168,7 +168,7 @@ export default function CommunityPage() {
 
     setAuditing(true);
     try {
-      // Wire to backend / rugcheck / Helius / your graph:
+      // Wire to backend / rugcheck / Solana RPC / your graph:
       // POST /api/community/dev-audit { wallet }
       // Backend should: list tokens created, related wallets, known flags, then return structured result
       const res = await fetch('/api/community/dev-audit', {

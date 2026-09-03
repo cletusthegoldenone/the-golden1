@@ -16,6 +16,17 @@ const POLICY_VERSIONS = {
 };
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || '';
+const PUBLIC_SOLANA_RPC_URL = 'https://api.mainnet-beta.solana.com';
+const LEGACY_HELIUS_RPC_URL = HELIUS_API_KEY
+  ? `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`
+  : '';
+const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL
+  || process.env.HELIUS_RPC_URL
+  || LEGACY_HELIUS_RPC_URL
+  || process.env.RPC_URL
+  || PUBLIC_SOLANA_RPC_URL;
+const SOLANA_SEND_RPC_URL = process.env.SOLANA_SEND_RPC_URL
+  || SOLANA_RPC_URL;
 const RUGCHECK_API_KEY = process.env.RUGCHECK_API_KEY || '';
 const RUGCHECK_MIN_SCORE = numberFromEnv(process.env.RUGCHECK_MIN_SCORE, 500);
 const RUGCHECK_BLOCK_ON_ERROR = boolFromEnv(process.env.RUGCHECK_BLOCK_ON_ERROR, false);
@@ -69,6 +80,8 @@ function productionConfigErrors() {
 module.exports = {
   POLICY_VERSIONS,
   HELIUS_API_KEY,
+  SOLANA_RPC_URL,
+  SOLANA_SEND_RPC_URL,
   RUGCHECK_API_KEY,
   RUGCHECK_MIN_SCORE,
   RUGCHECK_BLOCK_ON_ERROR,

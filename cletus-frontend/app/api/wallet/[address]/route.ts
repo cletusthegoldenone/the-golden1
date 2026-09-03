@@ -1,12 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Build Helius URL server-side, keeping the API key out of the client bundle
+// Build the Solana RPC URL server-side, keeping private config out of the client bundle
 function getSolanaRpc(): string {
+  const privateUrl = process.env.SOLANA_RPC_URL;
+  if (privateUrl) return privateUrl;
+
+  const publicSolanaUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
+  if (publicSolanaUrl) return publicSolanaUrl;
+
   const apiKey = process.env.HELIUS_API_KEY;
   if (apiKey && apiKey !== 'your_helius_api_key_here') {
     return `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
   }
-  return process.env.NEXT_PUBLIC_HELIUS_RPC_URL ?? 'https://api.mainnet-beta.solana.com';
+
+  return process.env.NEXT_PUBLIC_HELIUS_RPC_URL
+    ?? process.env.RPC_URL
+    ?? 'https://api.mainnet-beta.solana.com';
 }
 
 const SPL_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';

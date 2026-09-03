@@ -24,7 +24,7 @@ export async function GET() {
 
   // Check services in parallel
   const [rpcCheck, dexCheck, geminiCheck, jupiterCheck] = await Promise.all([
-    // Helius RPC — call getHealth JSON-RPC method
+    // Solana RPC — call getHealth JSON-RPC method
     fetch(rpcUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -34,9 +34,9 @@ export async function GET() {
       .then(async (r) => {
         const latency = Date.now(); // approximate
         const json = await r.json() as { result?: string };
-        return { ok: json.result === 'ok', latencyMs: latency, label: 'Helius RPC' };
+        return { ok: json.result === 'ok', latencyMs: latency, label: 'Solana RPC' };
       })
-      .catch(() => ({ ok: false, latencyMs: 0, label: 'Helius RPC' })),
+      .catch(() => ({ ok: false, latencyMs: 0, label: 'Solana RPC' })),
 
     ping('https://api.dexscreener.com/token-boosts/top/v1').then((r) => ({
       ...r,
