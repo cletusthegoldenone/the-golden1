@@ -59,7 +59,7 @@ const TIME_OPTIONS = Array.from({ length: 24 * 2 }, (_, i) => {
 });
 
 export default function TradingConfigPage() {
-  const [capital, setCapital] = useState(50);
+  const [capital, setCapital] = useState(1000);
   const [activeDays, setActiveDays] = useState<Set<string>>(
     () => new Set(['Mon', 'Tue', 'Wed', 'Thu', 'Fri'])
   );
@@ -236,7 +236,7 @@ export default function TradingConfigPage() {
       <main className="flex-1 px-4 sm:px-6 py-6">
         <div className="max-w-2xl mx-auto space-y-4">
           {/* Hero card */}
-          <section className="rounded-2xl border border-white/10 bg-[#121212] p-5 space-y-4">
+          <section className="rounded-2xl border border-white/10 bg-[#161d24] p-5 space-y-4">
             <div>
               <h1 className="text-xl font-bold tracking-tight">Trading Configuration</h1>
               <p className="text-sm text-white/50 mt-1.5 leading-relaxed">
@@ -244,25 +244,25 @@ export default function TradingConfigPage() {
                 trades automatically within these parameters.
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap">
               <button
                 type="button"
                 onClick={startSimulation}
-                className="px-5 py-2.5 rounded-full text-sm font-semibold bg-emerald-500 text-black hover:bg-emerald-400 transition-colors"
+                className="px-5 py-3 rounded-2xl text-sm font-semibold bg-emerald-500 text-black hover:bg-emerald-400 transition-colors"
               >
                 ▶ {running ? 'Running…' : 'Start Simulation'}
               </button>
               <button
                 type="button"
                 onClick={resetSimulation}
-                className="px-5 py-2.5 rounded-full text-sm font-medium border border-white/15 text-white/70 hover:bg-white/5 transition-colors"
+                className="px-5 py-3 rounded-2xl text-sm font-semibold border border-white/10 bg-black/20 text-white/70 hover:bg-white/5 transition-colors"
               >
                 ↺ Reset
               </button>
               <button
                 type="button"
                 onClick={saveConfig}
-                className="px-5 py-2.5 rounded-full text-sm font-medium border border-white/15 text-white/70 hover:bg-white/5 transition-colors"
+                className="col-span-2 sm:col-span-1 px-5 py-3 rounded-2xl text-sm font-medium border border-white/15 text-white/70 hover:bg-white/5 transition-colors"
               >
                 {saved ? 'Saved' : 'Save'}
               </button>
@@ -275,7 +275,7 @@ export default function TradingConfigPage() {
           </section>
 
           {/* Starting capital */}
-          <section className="rounded-2xl border border-white/10 bg-[#121212] p-5 space-y-3">
+          <section className="rounded-2xl border border-white/10 bg-[#161d24] p-5 space-y-3">
             <div className="flex items-center gap-2">
               <span>💰</span>
               <h2 className="text-xs font-semibold uppercase tracking-wider text-white/50">
@@ -285,7 +285,7 @@ export default function TradingConfigPage() {
             <p className="text-xs text-white/40">
               Paper balance used for all simulated trades. Resets when you click Reset.
             </p>
-            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black px-3 py-2.5">
+            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2.5">
               <span className="text-white/40">$</span>
               <input
                 type="number"
@@ -303,8 +303,8 @@ export default function TradingConfigPage() {
                   type="button"
                   onClick={() => setCapital(c)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-mono border transition-colors ${
-                    capital === c
-                      ? 'border-emerald-500 text-emerald-400 bg-emerald-500/10'
+                     capital === c
+                      ? 'border-emerald-500/50 text-emerald-400 bg-emerald-500/15'
                       : 'border-white/10 text-white/50 hover:border-white/25'
                   }`}
                 >
@@ -315,7 +315,7 @@ export default function TradingConfigPage() {
           </section>
 
           {/* Trading hours */}
-          <section className="rounded-2xl border border-white/10 bg-[#121212] p-5 space-y-4">
+          <section className="rounded-2xl border border-white/10 bg-[#161d24] p-5 space-y-4">
             <div className="flex items-center gap-2">
               <span>🕐</span>
               <h2 className="text-xs font-semibold uppercase tracking-wider text-white/50">
@@ -334,10 +334,10 @@ export default function TradingConfigPage() {
                     key={d}
                     type="button"
                     onClick={() => toggleDay(d)}
-                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                    className={`px-5 py-2 rounded-2xl text-base sm:text-sm font-semibold border transition-colors ${
                       activeDays.has(d)
-                        ? 'bg-emerald-500 text-black'
-                        : 'bg-white/5 text-white/40 border border-white/10'
+                        ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                        : 'bg-black/20 text-white/40 border-white/10'
                     }`}
                   >
                     {d}
