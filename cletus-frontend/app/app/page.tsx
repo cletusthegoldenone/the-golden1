@@ -89,6 +89,8 @@ function StatCard({
 
 export default function AppDashboardPage() {
   const [stats, setStats] = useState<UserStats>(EMPTY_STATS);
+  const [activeSignals, setActiveSignals] = useState(0);
+  const [signalsLive, setSignalsLive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [identity, setIdentity] = useState<string | null>(null);
   const [hasSession, setHasSession] = useState(true);
@@ -123,6 +125,17 @@ export default function AppDashboardPage() {
         setStats({ ...EMPTY_STATS, trialActive: false, daysRemaining: 0 });
       } else {
         setHasSession(true);
+      }
+
+      try {
+        const signalsRes = await fetch('/api/signals');
+        if (signalsRes.ok) {
+          const signalsData = await signalsRes.json();
+          setActiveSignals(Array.isArray(signalsData?.signals) ? signalsData.signals.length : 0);
+          setSignalsLive(Boolean(signalsData?.isLive));
+        }
+      } catch {
+        // keep previous signals snapshot on transient errors
       }
     } catch {
       setHasSession(true);
@@ -272,6 +285,13 @@ export default function AppDashboardPage() {
                 sub="all time"
                 neutral
                 icon="🔢"
+              />
+              <StatCard
+                label="Active Signals"
+                value={String(activeSignals)}
+                sub={signalsLive ? 'live feed' : 'simulated feed'}
+                neutral
+                icon="⚡"
               />
             </div>
           </section>
