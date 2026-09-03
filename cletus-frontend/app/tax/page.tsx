@@ -6,7 +6,7 @@
  * Route: /tax
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 
@@ -14,6 +14,7 @@ export default function TaxCenterRegisterPage() {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [ready, setReady] = useState(false);
   const [form, setForm] = useState({
     fullLegalName: '',
     email: '',
@@ -38,6 +39,15 @@ export default function TaxCenterRegisterPage() {
     setError('');
   };
 
+  useEffect(() => {
+    const acceptedAt = localStorage.getItem('cletusLegalAcceptedAt');
+    if (!acceptedAt) {
+      router.replace('/legal');
+      return;
+    }
+    setReady(true);
+  }, [router]);
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
@@ -45,6 +55,13 @@ export default function TaxCenterRegisterPage() {
     setError('');
 
     try {
+      const legalAcceptedAt = localStorage.getItem('cletusLegalAcceptedAt');
+      if (!legalAcceptedAt) {
+        setSubmitting(false);
+        router.replace('/legal');
+        return;
+      }
+
       const res = await fetch('/api/trial/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -53,6 +70,7 @@ export default function TaxCenterRegisterPage() {
           email: form.email.trim(),
           country: form.country.trim(),
           taxId: form.taxId.trim(),
+          legalAcceptedAt,
           acknowledgedAt: new Date().toISOString(),
         }),
       });
@@ -67,6 +85,10 @@ export default function TaxCenterRegisterPage() {
       setSubmitting(false);
     }
   };
+
+  if (!ready) {
+    return null;
+  }
 
   return (
     <div className="min-h-screen bg-black text-white flex flex-col">
