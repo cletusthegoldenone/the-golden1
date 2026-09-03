@@ -72,10 +72,10 @@ Use `cletus-frontend/railway.toml` (or paste):
 ```toml
 [build]
 builder = "nixpacks"
-buildCommand = "npm ci && npm run build"
+buildCommand = "npm install --omit=optional --ignore-scripts && npm run build"
 
 [deploy]
-startCommand = "npm start"
+startCommand = "node .next/standalone/server.js"
 healthcheckPath = "/api/system-status"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"

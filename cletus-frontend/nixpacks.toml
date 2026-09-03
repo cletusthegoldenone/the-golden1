@@ -1,8 +1,8 @@
 [phases.setup]
-nixPkgs = ["nodejs_20", "python3", "gcc", "eudev"]
+nixPkgs = ["nodejs_20"]
 
 [phases.install]
-cmds = ["npm install --omit=optional"]
+cmds = ["npm install --omit=optional --ignore-scripts"]
 
 [start]
-cmd = "npm start"
+cmd = "node .next/standalone/server.js"
