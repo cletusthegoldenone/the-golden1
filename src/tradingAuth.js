@@ -2,6 +2,7 @@ const {
   JUPITER_FEE_WALLET,
   FEE_ROUTING_ENABLED,
   FEE_ROUTING_BPS,
+  ENABLE_KILL_SWITCH,
   TRIAL_DAYS,
   MONTHLY_GROSS_PROFIT_CAP_USD,
   WEEKLY_PASS_USDC
@@ -36,7 +37,7 @@ function evaluateTradeAuthorization(
   { pair, expectedGrossProfitUsd = 0, action = 'swap', tradeSizeUsd = 0 },
   now = new Date()
 ) {
-  if (state.operatorFlags.killSwitch) {
+  if (ENABLE_KILL_SWITCH && state.operatorFlags.killSwitch) {
     return deny('GLOBAL_KILL_SWITCH_ACTIVE', 'Trading is currently paused by operator kill switch.');
   }
 

@@ -49,6 +49,7 @@ const RATE_LIMIT_PUBLIC_WINDOW_MS = numberFromEnv(process.env.RATE_LIMIT_PUBLIC_
 const RATE_LIMIT_PUBLIC_MAX = numberFromEnv(process.env.RATE_LIMIT_PUBLIC_MAX, 60);
 const RATE_LIMIT_PROTECTED_WINDOW_MS = numberFromEnv(process.env.RATE_LIMIT_PROTECTED_WINDOW_MS, 60000);
 const RATE_LIMIT_PROTECTED_MAX = numberFromEnv(process.env.RATE_LIMIT_PROTECTED_MAX, 120);
+const ENABLE_KILL_SWITCH = boolFromEnv(process.env.ENABLE_KILL_SWITCH, true);
 
 const MAX_BODY_BYTES = numberFromEnv(process.env.MAX_BODY_BYTES, 1024 * 1024);
 
@@ -98,6 +99,7 @@ module.exports = {
   RATE_LIMIT_PUBLIC_MAX,
   RATE_LIMIT_PROTECTED_WINDOW_MS,
   RATE_LIMIT_PROTECTED_MAX,
+  ENABLE_KILL_SWITCH,
   MAX_BODY_BYTES,
   productionConfigErrors
 };
