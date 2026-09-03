@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["nodejs_20", "python3", "gcc"]
+nixPkgs = ["nodejs_20", "python3", "gcc", "eudev"]
 
 [phases.install]
 cmds = ["npm install --omit=optional"]
