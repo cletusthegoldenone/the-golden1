@@ -19,21 +19,22 @@ const PAIR_MINTS: Record<string, string> = {
 };
 
 // Fallback base prices (used when DexScreener is unavailable)
-const FALLBACK_PRICES: Record<string, { base: number; vol: number }> = {
-  'SOL/USDC':  { base: 185, vol: 2.5 },
-  'JTO/USDC':  { base: 3.2, vol: 0.08 },
-  'WIF/USDC':  { base: 2.8, vol: 0.07 },
-  'BONK/USDC': { base: 0.000035, vol: 0.0000008 },
-  'PYTH/USDC': { base: 0.42, vol: 0.012 },
-  'JUP/USDC':  { base: 1.15, vol: 0.03 },
+const FALLBACK_PRICES: Record<string, { base: number; vol: number; change24h: number; volume24h: number }> = {
+  'SOL/USDC':  { base: 185, vol: 2.5, change24h: 0, volume24h: 180_000_000 },
+  'JTO/USDC':  { base: 3.2, vol: 0.08, change24h: 0, volume24h: 22_000_000 },
+  'WIF/USDC':  { base: 2.8, vol: 0.07, change24h: 0, volume24h: 48_000_000 },
+  'BONK/USDC': { base: 0.000035, vol: 0.0000008, change24h: 0, volume24h: 70_000_000 },
+  'PYTH/USDC': { base: 0.42, vol: 0.012, change24h: 0, volume24h: 16_000_000 },
+  'JUP/USDC':  { base: 1.15, vol: 0.03, change24h: 0, volume24h: 35_000_000 },
   // Backward-compat aliases
-  'SOL/USDT':  { base: 185, vol: 2.5 },
-  'JTO/USDT':  { base: 3.2, vol: 0.08 },
-  'WIF/USDT':  { base: 2.8, vol: 0.07 },
-  'BONK/USDT': { base: 0.000035, vol: 0.0000008 },
-  'PYTH/USDT': { base: 0.42, vol: 0.012 },
-  'JUP/USDT':  { base: 1.15, vol: 0.03 },
+  'SOL/USDT':  { base: 185, vol: 2.5, change24h: 0, volume24h: 180_000_000 },
+  'JTO/USDT':  { base: 3.2, vol: 0.08, change24h: 0, volume24h: 22_000_000 },
+  'WIF/USDT':  { base: 2.8, vol: 0.07, change24h: 0, volume24h: 48_000_000 },
+  'BONK/USDT': { base: 0.000035, vol: 0.0000008, change24h: 0, volume24h: 70_000_000 },
+  'PYTH/USDT': { base: 0.42, vol: 0.012, change24h: 0, volume24h: 16_000_000 },
+  'JUP/USDT':  { base: 1.15, vol: 0.03, change24h: 0, volume24h: 35_000_000 },
 };
+const GENERIC_FALLBACK = { base: 1, vol: 0.05, change24h: 0, volume24h: 1_000_000 };
 
 // ── Fetch real current price from DexScreener ─────────────────────────────────
 
@@ -55,6 +56,16 @@ function getQuotePriority(symbol?: string): number {
   return 0;
 }
 
+function normalizePairKey(input: string): string | null {
+  const trimmed = input.trim();
+  const parts = trimmed.split('/');
+  if (parts.length !== 2) return null;
+  const [base, quote] = parts;
+  if (!base || !quote) return null;
+  if (!/^[a-z0-9._-]+$/i.test(base) || !/^[a-z0-9._-]+$/i.test(quote)) return null;
+  return `${base.toUpperCase()}/${quote.toUpperCase()}`;
+}
+
 async function fetchRealPrice(
   mint: string
 ): Promise<{ price: number; change24h: number; volume24h: number; quoteSymbol: string } | null> {
@@ -65,15 +76,27 @@ async function fetchRealPrice(
     });
     if (!res.ok) return null;
     const data = await res.json() as { pairs?: DexPair[] };
-    const pairs = (data.pairs ?? [])
-      .filter((p) => p.chainId === 'solana' && parseFloat(p.priceUsd) > 0)
-      .sort((a, b) => {
+    const pairs = (data.pairs ?? []).filter((p) => p.chainId === 'solana' && parseFloat(p.priceUsd) > 0);
+    const byLiquidity = (a: DexPair, b: DexPair) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0);
+    const withQuote = (quote: string[]) =>
+      pairs
+        .filter((pair) => quote.includes(pair.quoteToken?.symbol?.toUpperCase() || ''))
+        .sort(byLiquidity);
+
+    const liquidUsdc = withQuote(['USDC']).filter((pair) => (pair.liquidity?.usd ?? 0) >= 2_000);
+    const solQuote = withQuote(['SOL', 'WSOL']);
+    const usdtQuote = withQuote(['USDT']);
+    const top =
+      liquidUsdc[0] ??
+      solQuote[0] ??
+      usdtQuote[0] ??
+      [...pairs].sort((a, b) => {
         const quoteDiff = getQuotePriority(b.quoteToken?.symbol) - getQuotePriority(a.quoteToken?.symbol);
         if (quoteDiff !== 0) return quoteDiff;
-        return (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0);
-      });
-    if (pairs.length === 0) return null;
-    const top = pairs[0];
+        return byLiquidity(a, b);
+      })[0] ??
+      null;
+    if (!top) return null;
     return {
       price: parseFloat(top.priceUsd),
       change24h: top.priceChange?.h24 ?? 0,
@@ -142,7 +165,8 @@ const CACHE_TTL_MS = 15_000;
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const pair       = searchParams.get('pair') || 'SOL/USDC';
+  const rawPair = searchParams.get('pair') || 'SOL/USDC';
+  const pair = normalizePairKey(rawPair) ?? 'SOL/USDC';
   const mintParam  = searchParams.get('mint') || '';
   const timeframe  = searchParams.get('timeframe') || '15m';
   const count      = Math.min(500, parseInt(searchParams.get('count') || '200', 10));
@@ -151,10 +175,10 @@ export async function GET(request: Request) {
     '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400, '1w': 604800,
   };
 
-  const fallback = FALLBACK_PRICES[pair] ?? FALLBACK_PRICES['SOL/USDC'];
+  const fallback = FALLBACK_PRICES[pair] ?? GENERIC_FALLBACK;
   const tfSeconds = timeframeSeconds[timeframe] ?? 900;
   const mint = mintParam || PAIR_MINTS[pair];
-  const cacheKey = mint || pair;
+  const cacheKey = mint ? `${mint}::${pair}` : pair;
 
   // Try to get a real current price
   let realPrice: { price: number; change24h: number; volume24h: number; quoteSymbol: string } | null = null;
@@ -177,8 +201,8 @@ export async function GET(request: Request) {
   }
 
   const endPrice = realPrice?.price ?? fallback.base;
-  const change24h = realPrice?.change24h ?? 0;
-  const volume24h = realPrice?.volume24h ?? 0;
+  const change24h = realPrice?.change24h ?? fallback.change24h;
+  const volume24h = realPrice?.volume24h ?? fallback.volume24h;
   // Scale volatility proportionally to price magnitude
   // Scale volatility as 0.8% of price per candle — tuned to produce
   // micro-cap-like swings without being unrealistically spiky.
