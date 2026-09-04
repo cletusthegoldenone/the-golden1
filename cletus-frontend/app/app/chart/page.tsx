@@ -166,10 +166,21 @@ function derivePriceFormat(candles: Candle[]): { precision: number; minMove: num
     }
   }
 
-  const precisionFromStep = Number.isFinite(minStep) ? Math.ceil(-Math.log10(minStep)) + 1 : 0;
+  const normalizeStep = (value: number) => Number.parseFloat(value.toPrecision(12));
+  const precisionForValue = (value: number) => {
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    const [mantissa, exponentRaw] = value.toExponential().split('e');
+    const exponent = Number.parseInt(exponentRaw, 10);
+    const mantissaDecimals = (mantissa.split('.')[1] || '').length;
+    return Math.max(0, -exponent + mantissaDecimals);
+  };
+
+  const minStepValue = Number.isFinite(minStep) ? normalizeStep(minStep) : null;
+  const precisionFromStep = minStepValue != null ? precisionForValue(minStepValue) : 0;
   const precisionFromPrice = Math.ceil(-Math.log10(minAbsPrice)) + 2;
   const precision = Math.min(16, Math.max(2, Math.max(precisionFromStep, precisionFromPrice)));
-  return { precision, minMove: Number(`1e-${precision}`) };
+  const minMove = minStepValue != null && minStepValue > 0 ? minStepValue : Number(`1e-${precision}`);
+  return { precision, minMove };
 }
 
 function formatPercent(value?: number) {
