@@ -139,12 +139,16 @@ function derivePriceFormat(candles: Candle[]): { precision: number; minMove: num
   }
 
   let minAbsPrice = Number.POSITIVE_INFINITY;
+  const points: number[] = [];
   for (const candle of candles) {
     const values = [candle.open, candle.high, candle.low, candle.close];
     for (const value of values) {
       const abs = Math.abs(value);
       if (Number.isFinite(abs) && abs > 0 && abs < minAbsPrice) {
         minAbsPrice = abs;
+      }
+      if (Number.isFinite(value) && value > 0) {
+        points.push(value);
       }
     }
   }
@@ -153,7 +157,18 @@ function derivePriceFormat(candles: Candle[]): { precision: number; minMove: num
     return { precision: 6, minMove: 0.000001 };
   }
 
-  const precision = Math.min(16, Math.max(2, Math.ceil(-Math.log10(minAbsPrice)) + 2));
+  points.sort((a, b) => a - b);
+  let minStep = Number.POSITIVE_INFINITY;
+  for (let i = 1; i < points.length; i += 1) {
+    const step = points[i] - points[i - 1];
+    if (step > 0 && step < minStep) {
+      minStep = step;
+    }
+  }
+
+  const precisionFromStep = Number.isFinite(minStep) ? Math.ceil(-Math.log10(minStep)) : 0;
+  const precisionFromPrice = Math.ceil(-Math.log10(minAbsPrice)) + 2;
+  const precision = Math.min(16, Math.max(2, Math.max(precisionFromStep, precisionFromPrice)));
   return { precision, minMove: Number(`1e-${precision}`) };
 }
 
