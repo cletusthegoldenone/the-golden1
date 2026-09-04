@@ -33,7 +33,6 @@ type Candle = {
 };
 
 type Range = '1m' | '5m' | '15m' | '1H' | '4H' | '1D' | '1W';
-type ViewMode = 'price' | 'mcap';
 
 const RANGE_CONFIG: Record<Range, { timeframe: string; count: string }> = {
   '1m': { timeframe: '1m', count: '120' },
@@ -46,18 +45,18 @@ const RANGE_CONFIG: Record<Range, { timeframe: string; count: string }> = {
 };
 
 const DEFAULT_SYMBOL = 'BONK';
+const DEFAULT_MINT = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
 
 function normalizeTokenResults(list: unknown[]): TokenResult[] {
-  return list
-    .map((item) => {
+  return list.reduce<TokenResult[]>((acc, item) => {
       const token = item as Partial<TokenResult>;
       const symbol = typeof token.symbol === 'string' ? token.symbol.trim() : '';
       const name = typeof token.name === 'string' ? token.name.trim() : '';
       const address = typeof token.address === 'string' ? token.address.trim() : '';
       const id = typeof token.id === 'string' ? token.id.trim() : address || symbol || name;
-      if (!id || (!symbol && !name && !address)) return null;
+      if (!id || (!symbol && !name && !address)) return acc;
 
-      return {
+      acc.push({
         id,
         symbol: symbol || name || address.slice(0, 6),
         name: name || symbol || 'Unknown token',
@@ -75,9 +74,9 @@ function normalizeTokenResults(list: unknown[]): TokenResult[] {
         chain: typeof token.chain === 'string' ? token.chain : 'Solana',
         quoteSymbol: 'USDC',
         pairAddress: typeof token.pairAddress === 'string' ? token.pairAddress : undefined,
-      } satisfies TokenResult;
-    })
-    .filter((item: TokenResult | null): item is TokenResult => Boolean(item));
+      });
+      return acc;
+    }, []);
 }
 
 function formatUsd(value?: number) {
@@ -122,6 +121,15 @@ function truncateAddress(value?: string) {
   return `${value.slice(0, 4)}…${value.slice(-4)}`;
 }
 
+function parseTimestamp(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
 export default function TokenChartPage() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<TokenResult[]>([]);
@@ -131,7 +139,7 @@ export default function TokenChartPage() {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
   const [range, setRange] = useState<Range>('15m');
-  const [viewMode, setViewMode] = useState<ViewMode>('price');
+  const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [chartSource, setChartSource] = useState('DexScreener / Helius');
   const [chartReady, setChartReady] = useState(false);
@@ -140,6 +148,18 @@ export default function TokenChartPage() {
   const chartRef = useRef<ReturnType<typeof import('lightweight-charts')['createChart']> | null>(null);
   const candleSeriesRef = useRef<unknown>(null);
   const volumeSeriesRef = useRef<unknown>(null);
+
+  const fetchTokenResults = useCallback(async (term: string): Promise<TokenResult[]> => {
+    const res = await fetch(`/api/tokens?q=${encodeURIComponent(term)}`);
+    if (!res.ok) throw new Error('search-unavailable');
+    const data = await res.json();
+    const list: unknown[] = Array.isArray(data.tokens)
+      ? data.tokens
+      : Array.isArray(data.results)
+        ? data.results
+        : [];
+    return normalizeTokenResults(list);
+  }, []);
 
   const searchTokens = useCallback(async (value: string) => {
     const trimmed = value.trim();
@@ -156,31 +176,20 @@ export default function TokenChartPage() {
     setHasSearched(true);
 
     try {
-      const res = await fetch(`/api/tokens?q=${encodeURIComponent(trimmed)}`);
-      if (!res.ok) {
-        setResults([]);
-        setError('Search unavailable. Try again.');
-        return;
-      }
-
-      const data = await res.json();
-      const list: unknown[] = Array.isArray(data.tokens)
-        ? data.tokens
-        : Array.isArray(data.results)
-          ? data.results
-          : [];
-      setResults(normalizeTokenResults(list));
+      const normalized = await fetchTokenResults(trimmed);
+      setResults(normalized);
     } catch {
       setResults([]);
       setError('Search failed. Check connection.');
     } finally {
       setSearching(false);
     }
-  }, []);
+  }, [fetchTokenResults]);
 
   const loadChart = useCallback(async (mint: string, symbol: string, nextRange: Range) => {
     if (!mint) {
       setCandles([]);
+      setLastFetchedAt(null);
       setError('Token mint missing. Pick a different token.');
       return;
     }
@@ -188,6 +197,7 @@ export default function TokenChartPage() {
     const config = RANGE_CONFIG[nextRange];
     setChartLoading(true);
     setCandles([]);
+    setLastFetchedAt(null);
     setError('');
 
     try {
@@ -201,6 +211,7 @@ export default function TokenChartPage() {
       const res = await fetch(`/api/prices?${params}`);
       if (!res.ok) {
         setCandles([]);
+        setLastFetchedAt(null);
         setError('Chart data unavailable for this token.');
         return;
       }
@@ -208,6 +219,7 @@ export default function TokenChartPage() {
       const data = await res.json();
       const nextCandles = Array.isArray(data.candles) ? data.candles : [];
       setCandles(nextCandles);
+      setLastFetchedAt(parseTimestamp(data.lastUpdated));
       setChartSource(typeof data.source === 'string' ? data.source : 'DexScreener / Helius');
       setSelected((prev) =>
         prev
@@ -221,6 +233,7 @@ export default function TokenChartPage() {
       );
     } catch {
       setCandles([]);
+      setLastFetchedAt(null);
       setError('Failed to load chart.');
     } finally {
       setChartLoading(false);
@@ -251,21 +264,15 @@ export default function TokenChartPage() {
     let cancelled = false;
 
     const bootstrapDefaultToken = async () => {
-      setQuery(DEFAULT_SYMBOL);
       try {
-        const res = await fetch(`/api/tokens?q=${encodeURIComponent(DEFAULT_SYMBOL)}`);
-        if (!res.ok || cancelled) return;
-        const data = await res.json();
-        const list: unknown[] = Array.isArray(data.tokens)
-          ? data.tokens
-          : Array.isArray(data.results)
-            ? data.results
-            : [];
-        const normalized = normalizeTokenResults(list);
+        const normalized = await fetchTokenResults(DEFAULT_SYMBOL);
         if (!normalized.length || cancelled) return;
         const preferred =
-          normalized.find((token) => token.symbol.toUpperCase() === DEFAULT_SYMBOL) ?? normalized[0];
+          normalized.find((token) => token.address === DEFAULT_MINT) ??
+          normalized.find((token) => token.symbol.toUpperCase() === DEFAULT_SYMBOL) ??
+          normalized[0];
         setSelected({ ...preferred, quoteSymbol: 'USDC' });
+        setQuery(preferred.symbol || preferred.name || DEFAULT_SYMBOL);
       } catch {
         // no-op; empty chart state already handled
       }
@@ -275,7 +282,7 @@ export default function TokenChartPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [fetchTokenResults]);
 
   useEffect(() => {
     if (!selected || !chartContainerRef.current) return;
@@ -371,19 +378,7 @@ export default function TokenChartPage() {
     };
   }, [selected]);
 
-  const displayedCandles = useMemo(() => {
-    if (viewMode === 'price') return candles;
-    if (!selected?.mcap || !selected.priceUsd || selected.priceUsd <= 0) return candles;
-    const ratio = selected.mcap / selected.priceUsd;
-    if (!Number.isFinite(ratio) || ratio <= 0) return candles;
-    return candles.map((candle) => ({
-      ...candle,
-      open: candle.open * ratio,
-      high: candle.high * ratio,
-      low: candle.low * ratio,
-      close: candle.close * ratio,
-    }));
-  }, [candles, selected?.mcap, selected?.priceUsd, viewMode]);
+  const displayedCandles = candles;
 
   useEffect(() => {
     if (!candleSeriesRef.current || !volumeSeriesRef.current || !chartRef.current || !chartReady) return;
@@ -432,8 +427,8 @@ export default function TokenChartPage() {
   }, [selected]);
 
   const lastCandle = displayedCandles.length > 0 ? displayedCandles[displayedCandles.length - 1] : null;
-  const lastUpdateLabel = lastCandle
-    ? new Date(lastCandle.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const lastUpdateLabel = lastFetchedAt != null
+    ? new Date(lastFetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : '—';
 
   return (
@@ -585,6 +580,7 @@ export default function TokenChartPage() {
                     key={item}
                     type="button"
                     onClick={() => setRange(item)}
+                    aria-pressed={range === item}
                     className={`px-2 py-1 font-mono text-xs uppercase tracking-[0.14em] transition-colors ${
                       range === item
                         ? 'text-emerald-400'
@@ -596,28 +592,12 @@ export default function TokenChartPage() {
                 ))}
               </div>
               <div className="flex items-center gap-1 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setViewMode('price')}
-                  className={`border px-2.5 py-1 font-mono uppercase tracking-[0.14em] ${
-                    viewMode === 'price'
-                      ? 'border-emerald-400 text-emerald-400'
-                      : 'border-white/10 text-white/50 hover:border-white/35 hover:text-white'
-                  }`}
-                >
+                <span className="border border-emerald-400 px-2.5 py-1 font-mono uppercase tracking-[0.14em] text-emerald-400">
                   Price
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('mcap')}
-                  className={`border px-2.5 py-1 font-mono uppercase tracking-[0.14em] ${
-                    viewMode === 'mcap'
-                      ? 'border-emerald-400 text-emerald-400'
-                      : 'border-white/10 text-white/50 hover:border-white/35 hover:text-white'
-                  }`}
-                >
+                </span>
+                <span className="border border-white/10 px-2.5 py-1 font-mono uppercase tracking-[0.14em] text-white/40">
                   Mcap
-                </button>
+                </span>
               </div>
             </section>
 
@@ -633,7 +613,7 @@ export default function TokenChartPage() {
                   <div className="absolute inset-0 flex items-center justify-center px-4 text-center font-mono text-sm text-white/35">
                     No candle data available for this token.
                   </div>
-                ))}
+                )}
               </div>
 
               <div className="flex flex-col gap-2 border-t border-white/10 px-3 py-3 text-[11px] uppercase tracking-[0.16em] text-white/45 sm:flex-row sm:items-center sm:justify-between">
