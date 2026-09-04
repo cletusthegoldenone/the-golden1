@@ -122,7 +122,9 @@ function truncateAddress(value?: string) {
 }
 
 function parseTimestamp(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 0 && value < 100_000_000_000 ? value * 1000 : value;
+  }
   if (typeof value === 'string') {
     const parsed = Date.parse(value);
     if (Number.isFinite(parsed)) return parsed;
@@ -592,11 +594,11 @@ export default function TokenChartPage() {
                 ))}
               </div>
               <div className="flex items-center gap-1 text-xs">
-                <span className="border border-emerald-400 px-2.5 py-1 font-mono uppercase tracking-[0.14em] text-emerald-400">
+                <span className="border border-emerald-400/40 px-2.5 py-1 font-mono uppercase tracking-[0.14em] text-emerald-400/85">
                   Price
                 </span>
-                <span className="border border-white/10 px-2.5 py-1 font-mono uppercase tracking-[0.14em] text-white/40">
-                  Mcap
+                <span className="border border-white/10 px-2.5 py-1 font-mono uppercase tracking-[0.14em] text-white/35">
+                  Mcap soon
                 </span>
               </div>
             </section>
