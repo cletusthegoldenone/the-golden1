@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSecComplianceContext } from '@/lib/sec-compliance';
 
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+
 const SYSTEM_PROMPT = `You are Cletus, an AI with master's-degree-level expertise spanning five disciplines. Your primary focus is finance, economics, and trading. You can answer questions on other topics, but you excel especially in:
 
 ## ECONOMICS
@@ -43,6 +45,7 @@ interface ConversationTurn {
 async function callGeminiAPI(message: string, history: ConversationTurn[] = []): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+  const model = process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
 
   const contents: ConversationTurn[] = [
     ...history,
@@ -50,7 +53,7 @@ async function callGeminiAPI(message: string, history: ConversationTurn[] = []):
   ];
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -74,6 +77,37 @@ async function callGeminiAPI(message: string, history: ConversationTurn[] = []):
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('Empty Gemini response');
   return text;
+}
+
+function getApiBaseUrl(): string {
+  return process.env.API_BASE_URL?.trim().replace(/\/+$/, '') ?? '';
+}
+
+async function callUpstreamChat(
+  message: string,
+  history: { role: string; content: string }[]
+): Promise<{ answer: string; usedLiveAI: boolean } | null> {
+  const apiBaseUrl = getApiBaseUrl();
+  if (!apiBaseUrl) return null;
+
+  try {
+    const upstream = await fetch(`${apiBaseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, history }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!upstream.ok) return null;
+
+    const data = await upstream.json();
+    if (typeof data?.answer !== 'string' || !data.answer.trim()) return null;
+    return {
+      answer: data.answer,
+      usedLiveAI: !!data.usedLiveAI,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function mockResponse(question: string): string {
@@ -135,7 +169,13 @@ export async function POST(request: NextRequest) {
       answer = await callGeminiAPI(message, history);
       usedLiveAI = true;
     } catch {
-      answer = mockResponse(message);
+      const upstream = await callUpstreamChat(message, rawHistory);
+      if (upstream) {
+        answer = upstream.answer;
+        usedLiveAI = upstream.usedLiveAI;
+      } else {
+        answer = mockResponse(message);
+      }
     }
 
     return NextResponse.json({
