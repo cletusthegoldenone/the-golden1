@@ -230,7 +230,14 @@ function mockResponse(question: string, history: ClientConversationTurn[] = []):
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const message: string = body.message ?? body.question ?? '';
+    const message =
+      (typeof body.message === 'string' ? body.message : '') ||
+      (typeof body.question === 'string' ? body.question : '');
+
+    if (!message.trim()) {
+      return NextResponse.json({ error: 'Message is required' }, { status: 400 });
+    }
+
     const rawHistory: { role: string; content: string }[] = Array.isArray(body.history)
       ? body.history
           .filter(
@@ -242,14 +249,7 @@ export async function POST(request: NextRequest) {
             content: typeof entry.content === 'string' ? entry.content : '',
           }))
       : [];
-    const normalizedHistory = normalizeConversationHistory(
-      rawHistory,
-      message
-    );
-
-    if (!message.trim()) {
-      return NextResponse.json({ error: 'Message is required' }, { status: 400 });
-    }
+    const normalizedHistory = normalizeConversationHistory(rawHistory, message);
 
     // Convert client history format → Gemini conversation format
     const history: ConversationTurn[] = normalizedHistory.map((m) => ({
