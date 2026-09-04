@@ -115,10 +115,9 @@ export default function CletusAIPage() {
   }, [messages]);
 
   const appendMessage = useCallback((message: ChatMessage) => {
-    const next = [...messagesRef.current, message];
-    messagesRef.current = next;
-    setMessages(next);
-    return next;
+    messagesRef.current = [...messagesRef.current, message];
+    setMessages((prev) => [...prev, message]);
+    return messagesRef.current;
   }, []);
 
   useEffect(() => {
