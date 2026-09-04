@@ -81,6 +81,18 @@ function normalizeConversationHistory(rawHistory = [], latestMessage = '') {
 }
 
 /**
+ * Escape user-provided text before reflecting it into markdown responses.
+ *
+ * @param {string} value
+ * @returns {string}
+ */
+function escapeForMarkdown(value) {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/([*_`[\]<>])/g, '\\$1');
+}
+
+/**
  * Call the Gemini generative language API.
  *
  * @param {string} message
@@ -141,7 +153,9 @@ async function callGeminiAPI(message, history = []) {
 function mockResponse(question, history = []) {
   const q = question.toLowerCase();
   const recentUserTurns = history.filter((turn) => turn.role === 'user');
-  const previousUserMessage = recentUserTurns[recentUserTurns.length - 1]?.content?.trim() ?? '';
+  const previousUserMessage = escapeForMarkdown(
+    recentUserTurns[recentUserTurns.length - 1]?.content?.trim() ?? ''
+  );
   const isFollowUp = /^(and|also|what about|how about|why|how|when|where|which|can you|could you|go deeper|elaborate|expand|compare)\b/i.test(question.trim());
 
   if (isFollowUp && previousUserMessage) {

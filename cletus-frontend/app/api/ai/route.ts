@@ -87,6 +87,12 @@ function normalizeConversationHistory(
   return normalized;
 }
 
+function escapeForMarkdown(value: string): string {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/([*_`[\]<>])/g, '\\$1');
+}
+
 async function callGeminiAPI(message: string, history: ConversationTurn[] = []): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
@@ -186,7 +192,9 @@ async function callUpstreamChat(
 function mockResponse(question: string, history: ClientConversationTurn[] = []): string {
   const q = question.toLowerCase();
   const recentUserTurns = history.filter((turn) => turn.role === 'user');
-  const previousUserMessage = recentUserTurns[recentUserTurns.length - 1]?.content?.trim() ?? '';
+  const previousUserMessage = escapeForMarkdown(
+    recentUserTurns[recentUserTurns.length - 1]?.content?.trim() ?? ''
+  );
   const isFollowUp =
     /^(and|also|what about|how about|why|how|when|where|which|can you|could you|go deeper|elaborate|expand|compare)\b/i.test(
       question.trim()

@@ -9,6 +9,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { flushSync } from 'react-dom';
 
 type ChatMessage = {
   role: 'user' | 'assistant';
@@ -115,9 +116,29 @@ export default function CletusAIPage() {
   }, [messages]);
 
   const appendMessage = useCallback((message: ChatMessage) => {
-    messagesRef.current = [...messagesRef.current, message];
-    setMessages((prev) => [...prev, message]);
-    return messagesRef.current;
+    setMessages((prev) => {
+      const next = [...prev, message];
+      messagesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const queueUserMessage = useCallback((content: string) => {
+    const userMessage: ChatMessage = { role: 'user', content };
+    let nextMessages = messagesRef.current;
+
+    flushSync(() => {
+      setMessages((prev) => {
+        nextMessages = [...prev, userMessage];
+        messagesRef.current = nextMessages;
+        return nextMessages;
+      });
+    });
+
+    return {
+      history: buildConversationHistory(nextMessages).slice(0, -1),
+      userMessage,
+    };
   }, []);
 
   useEffect(() => {
@@ -169,8 +190,7 @@ export default function CletusAIPage() {
     const text = input.trim();
     if (!text || loading) return;
     setInput('');
-    const next = appendMessage({ role: 'user', content: text });
-    const history = buildConversationHistory(next).slice(0, -1);
+    const { history } = queueUserMessage(text);
     setLoading(true);
     try {
       const res = await fetch('/api/ai', {
@@ -254,8 +274,7 @@ export default function CletusAIPage() {
       setLiveStatus('speaking');
 
       const userLine = finalText.trim();
-      const next = appendMessage({ role: 'user', content: userLine });
-      const history = buildConversationHistory(next).slice(0, -1);
+      const { history } = queueUserMessage(userLine);
 
       try {
         const res = await fetch('/api/ai', {
@@ -296,7 +315,7 @@ export default function CletusAIPage() {
     } catch {
       setLiveStatus('error');
     }
-  }, [appendMessage, liveOn]);
+  }, [appendMessage, liveOn, queueUserMessage]);
 
 
   useEffect(() => {
