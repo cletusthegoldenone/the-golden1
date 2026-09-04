@@ -122,7 +122,10 @@ export default function CletusAIPage() {
               side: (s.side === 'SHORT' || s.direction === 'SHORT' ? 'SHORT' : 'LONG') as
                 | 'LONG'
                 | 'SHORT',
-              score: rawScore <= 1 ? Math.round(rawScore * 100) : Math.round(rawScore),
+              score:
+                rawScore >= 0 && rawScore <= 1
+                  ? Math.round(rawScore * 100)
+                  : Math.round(rawScore),
               change24h: toNumber(s.change24h ?? s.priceChange24h),
               note: tags.length ? tags.join(' · ') : s.strength ?? 'Signal',
             };
