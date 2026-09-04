@@ -37,6 +37,35 @@ type CandleLike = Partial<Candle> & { time?: number | string };
 
 type Range = '1m' | '5m' | '15m' | '1H' | '4H' | '1D' | '1W';
 
+type OpenTradePosition = {
+  id: string;
+  tokenAddress: string;
+  tokenSymbol: string;
+  tokenName: string;
+  openedAt: number;
+  entryPrice: number;
+  currentPrice: number;
+  pnlUsd: number;
+  isDryRun: boolean;
+};
+
+type ClosedTradePosition = OpenTradePosition & {
+  closedAt: number;
+  exitPrice: number;
+  realisedPnlUsd: number;
+  closeReason: 'MANUAL' | 'STOP_LOSS' | 'TAKE_PROFIT' | 'KILL_SWITCH';
+};
+
+type TradeMovement = {
+  id: string;
+  kind: 'BUY' | 'SELL' | 'CANCEL';
+  text: string;
+  timestamp: number;
+  price: number;
+  pnlUsd?: number;
+  isDryRun: boolean;
+};
+
 const RANGE_CONFIG: Record<Range, { timeframe: string; count: string }> = {
   '1m': { timeframe: '1m', count: '120' },
   '5m': { timeframe: '5m', count: '120' },
@@ -87,6 +116,91 @@ function truncateAddress(value?: string) {
   if (!value) return '—';
   if (value.length <= 12) return value;
   return `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+function normalizeTimestamp(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed >= 1e12 ? parsed : parsed * 1000);
+}
+
+function normalizeTradePosition(input: unknown): OpenTradePosition | null {
+  if (!input || typeof input !== 'object') return null;
+  const raw = input as Partial<OpenTradePosition>;
+  const tokenAddress = typeof raw.tokenAddress === 'string' ? raw.tokenAddress.trim() : '';
+  const openedAt = normalizeTimestamp(raw.openedAt);
+  const entryPrice = typeof raw.entryPrice === 'number' ? raw.entryPrice : Number(raw.entryPrice);
+  const currentPrice = typeof raw.currentPrice === 'number' ? raw.currentPrice : Number(raw.currentPrice);
+  const pnlUsd = typeof raw.pnlUsd === 'number' ? raw.pnlUsd : Number(raw.pnlUsd);
+
+  if (!tokenAddress || !openedAt || !Number.isFinite(entryPrice) || !Number.isFinite(currentPrice)) {
+    return null;
+  }
+
+  return {
+    id: typeof raw.id === 'string' ? raw.id : `${tokenAddress}-${openedAt}`,
+    tokenAddress,
+    tokenSymbol: typeof raw.tokenSymbol === 'string' ? raw.tokenSymbol : '',
+    tokenName: typeof raw.tokenName === 'string' ? raw.tokenName : '',
+    openedAt,
+    entryPrice,
+    currentPrice,
+    pnlUsd: Number.isFinite(pnlUsd) ? pnlUsd : 0,
+    isDryRun: raw.isDryRun === true,
+  };
+}
+
+function normalizeClosedTradePosition(input: unknown): ClosedTradePosition | null {
+  const base = normalizeTradePosition(input);
+  if (!base || !input || typeof input !== 'object') return null;
+  const raw = input as Partial<ClosedTradePosition>;
+  const closedAt = normalizeTimestamp(raw.closedAt);
+  const exitPrice = typeof raw.exitPrice === 'number' ? raw.exitPrice : Number(raw.exitPrice);
+  const realisedPnlUsd =
+    typeof raw.realisedPnlUsd === 'number' ? raw.realisedPnlUsd : Number(raw.realisedPnlUsd);
+  const closeReason =
+    raw.closeReason === 'STOP_LOSS' ||
+    raw.closeReason === 'TAKE_PROFIT' ||
+    raw.closeReason === 'KILL_SWITCH' ||
+    raw.closeReason === 'MANUAL'
+      ? raw.closeReason
+      : null;
+
+  if (!closedAt || !Number.isFinite(exitPrice) || !closeReason) return null;
+
+  return {
+    ...base,
+    closedAt,
+    exitPrice,
+    realisedPnlUsd: Number.isFinite(realisedPnlUsd) ? realisedPnlUsd : base.pnlUsd,
+    closeReason,
+  };
+}
+
+function classifyClose(closeReason: ClosedTradePosition['closeReason']) {
+  if (closeReason === 'MANUAL' || closeReason === 'KILL_SWITCH') {
+    return { kind: 'CANCEL' as const, text: closeReason === 'KILL_SWITCH' ? 'CANCEL KS' : 'CANCEL' };
+  }
+  return { kind: 'SELL' as const, text: closeReason === 'TAKE_PROFIT' ? 'SELL TP' : 'SELL SL' };
+}
+
+function snapToNearestCandleTime(timestampMs: number, data: Candle[]): number | null {
+  if (!data.length) return null;
+  const target = Math.floor(timestampMs / 1000);
+  if (target < data[0].time || target > data[data.length - 1].time) return null;
+
+  let nearest = data[0].time;
+  let smallestDiff = Math.abs(target - nearest);
+
+  for (const candle of data) {
+    const diff = Math.abs(target - candle.time);
+    if (diff < smallestDiff) {
+      nearest = candle.time;
+      smallestDiff = diff;
+    }
+  }
+
+  return nearest;
 }
 
 function normalizeCandles(input: unknown): Candle[] {
@@ -164,6 +278,8 @@ export default function TokenChartPage() {
   const [error, setError] = useState('');
   const [chartSource, setChartSource] = useState('DexScreener / Helius');
   const [chartReady, setChartReady] = useState(false);
+  const [tradeActivityLoading, setTradeActivityLoading] = useState(false);
+  const [tradeMovements, setTradeMovements] = useState<TradeMovement[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<ReturnType<typeof import('lightweight-charts')['createChart']> | null>(null);
@@ -293,6 +409,73 @@ export default function TokenChartPage() {
     }
   }, []);
 
+  const loadTradeActivity = useCallback(async (mint: string) => {
+    if (!mint) {
+      setTradeMovements([]);
+      return;
+    }
+
+    setTradeActivityLoading(true);
+
+    try {
+      const res = await fetch('/api/trade/positions', { cache: 'no-store' });
+      if (!res.ok) {
+        setTradeMovements([]);
+        return;
+      }
+
+      const data = await res.json();
+      const normalizedMint = mint.trim().toLowerCase();
+      const open = Array.isArray(data.open)
+        ? data.open
+            .map(normalizeTradePosition)
+            .filter((item: OpenTradePosition | null): item is OpenTradePosition => Boolean(item))
+        : [];
+      const closed = Array.isArray(data.closed)
+        ? data.closed
+            .map(normalizeClosedTradePosition)
+            .filter((item: ClosedTradePosition | null): item is ClosedTradePosition => Boolean(item))
+        : [];
+
+      const positionsForToken = [...open, ...closed].filter(
+        (position) => position.tokenAddress.trim().toLowerCase() === normalizedMint
+      );
+      const closedForToken = closed.filter(
+        (position) => position.tokenAddress.trim().toLowerCase() === normalizedMint
+      );
+
+      const nextMovements = [
+        ...positionsForToken.map((position) => ({
+          id: `${position.id}-buy`,
+          kind: 'BUY' as const,
+          text: 'BUY',
+          timestamp: position.openedAt,
+          price: position.entryPrice,
+          pnlUsd: position.pnlUsd,
+          isDryRun: position.isDryRun,
+        })),
+        ...closedForToken.map((position) => {
+          const close = classifyClose(position.closeReason);
+          return {
+            id: `${position.id}-close`,
+            kind: close.kind,
+            text: close.text,
+            timestamp: position.closedAt,
+            price: position.exitPrice,
+            pnlUsd: position.realisedPnlUsd,
+            isDryRun: position.isDryRun,
+          };
+        }),
+      ].sort((a, b) => b.timestamp - a.timestamp);
+
+      setTradeMovements(nextMovements);
+    } catch {
+      setTradeMovements([]);
+    } finally {
+      setTradeActivityLoading(false);
+    }
+  }, []);
+
   const selectToken = useCallback((token: TokenResult) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     setSelected({ ...token, quoteSymbol: token.quoteSymbol || 'USDC' });
@@ -310,6 +493,21 @@ export default function TokenChartPage() {
       void loadChart(mint, symbol, quoteSymbol || 'USDC', range);
     }
   }, [loadChart, range, selected?.address, selected?.quoteSymbol, selected?.symbol]);
+
+  useEffect(() => {
+    const mint = selected?.address?.trim();
+    if (!mint) {
+      setTradeMovements([]);
+      return;
+    }
+
+    void loadTradeActivity(mint);
+    const interval = setInterval(() => {
+      void loadTradeActivity(mint);
+    }, 10_000);
+
+    return () => clearInterval(interval);
+  }, [loadTradeActivity, selected?.address]);
 
   useEffect(() => () => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -415,6 +613,11 @@ export default function TokenChartPage() {
     if (!candles.length) {
       (candleSeriesRef.current as { setData: (data: unknown[]) => void }).setData([]);
       (volumeSeriesRef.current as { setData: (data: unknown[]) => void }).setData([]);
+      (
+        candleSeriesRef.current as {
+          setMarkers?: (data: unknown[]) => void;
+        }
+      ).setMarkers?.([]);
       return;
     }
 
@@ -437,6 +640,44 @@ export default function TokenChartPage() {
     chartRef.current.timeScale().fitContent();
   }, [candles, chartReady]);
 
+  const chartMarkers = useMemo(() => {
+    if (!candles.length) return [];
+
+    return tradeMovements
+      .map((movement) => {
+        const time = snapToNearestCandleTime(movement.timestamp, candles);
+        if (!time) return null;
+
+        return {
+          time: time as unknown as import('lightweight-charts').Time,
+          position: movement.kind === 'BUY' ? 'belowBar' : 'aboveBar',
+          color:
+            movement.kind === 'BUY'
+              ? '#10b981'
+              : movement.kind === 'SELL'
+                ? '#ef4444'
+                : '#f59e0b',
+          shape:
+            movement.kind === 'BUY'
+              ? 'arrowUp'
+              : movement.kind === 'SELL'
+                ? 'arrowDown'
+                : 'circle',
+          text: movement.text,
+        };
+      })
+      .filter(Boolean);
+  }, [candles, tradeMovements]);
+
+  useEffect(() => {
+    if (!candleSeriesRef.current || !chartReady) return;
+    (
+      candleSeriesRef.current as {
+        setMarkers?: (data: unknown[]) => void;
+      }
+    ).setMarkers?.(chartMarkers);
+  }, [chartMarkers, chartReady]);
+
   const metricItems = useMemo(() => {
     if (!selected) return [];
 
@@ -456,6 +697,7 @@ export default function TokenChartPage() {
   }, [selected]);
 
   const lastCandle = candles.length > 0 ? candles[candles.length - 1] : null;
+  const recentMovements = tradeMovements.slice(0, 8);
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -650,6 +892,67 @@ export default function TokenChartPage() {
                 </div>
                 <div className="font-mono text-white/45">SOURCE {chartSource}</div>
               </div>
+            </section>
+
+            <section className="border border-white/10 bg-black px-3 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+                <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">
+                  Buy / Sell / Cancel Movement
+                </div>
+                {tradeActivityLoading && (
+                  <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/35">
+                    Syncing…
+                  </div>
+                )}
+              </div>
+
+              {recentMovements.length > 0 ? (
+                <div className="divide-y divide-white/5">
+                  {recentMovements.map((movement) => (
+                    <div
+                      key={movement.id}
+                      className="flex flex-col gap-2 py-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${
+                            movement.kind === 'BUY'
+                              ? 'bg-emerald-500/15 text-emerald-400'
+                              : movement.kind === 'SELL'
+                                ? 'bg-red-500/15 text-red-400'
+                                : 'bg-yellow-500/15 text-yellow-300'
+                          }`}
+                        >
+                          {movement.text}
+                        </span>
+                        <span className="font-mono text-white/85">{formatPriceDisplay(movement.price)}</span>
+                        {movement.isDryRun && (
+                          <span className="text-[10px] uppercase tracking-[0.16em] text-sky-400">
+                            Paper
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] uppercase tracking-[0.14em] text-white/40">
+                        <span>{new Date(movement.timestamp).toLocaleString()}</span>
+                        {movement.pnlUsd != null && (
+                          <span
+                            className={
+                              movement.pnlUsd >= 0 ? 'font-mono text-emerald-400' : 'font-mono text-red-400'
+                            }
+                          >
+                            {movement.pnlUsd >= 0 ? '+' : ''}
+                            {formatUsd(movement.pnlUsd)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="py-6 text-center text-sm text-white/35">
+                  No buy, sell, or cancel activity found for this token yet.
+                </div>
+              )}
             </section>
           </>
         ) : (
