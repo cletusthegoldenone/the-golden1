@@ -52,6 +52,18 @@ function toText(value: unknown, fallback = '???') {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
+function pickSymbol(s: ApiSignal) {
+  const direct = toText(s.base ?? s.symbol, '');
+  if (direct) return direct.toUpperCase();
+
+  const fromTokenName = toText(s.tokenName, '');
+  if (/^[a-z0-9$._-]{1,12}$/i.test(fromTokenName)) {
+    return fromTokenName.toUpperCase();
+  }
+
+  return '???';
+}
+
 const FALLBACK_SIGNALS: TokenSignal[] = [
   { id: '1', symbol: 'SOL', side: 'LONG', score: 88, change24h: 4.2, note: 'Momentum · volume up' },
   { id: '2', symbol: 'BONK', side: 'LONG', score: 81, change24h: 12.5, note: 'Breakout watch' },
@@ -106,7 +118,7 @@ export default function CletusAIPage() {
 
             return {
               id: s.id ?? String(i),
-              symbol: toText(s.base ?? s.symbol ?? s.tokenName).toUpperCase(),
+              symbol: pickSymbol(s),
               side: (s.side === 'SHORT' || s.direction === 'SHORT' ? 'SHORT' : 'LONG') as
                 | 'LONG'
                 | 'SHORT',
