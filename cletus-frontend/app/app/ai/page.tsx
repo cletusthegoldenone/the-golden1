@@ -13,6 +13,7 @@ import Link from 'next/link';
 type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
+  includeInHistory?: boolean;
 };
 
 type TokenSignal = {
@@ -75,12 +76,25 @@ const FALLBACK_SIGNALS: TokenSignal[] = [
   { id: '8', symbol: 'W', side: 'LONG', score: 70, change24h: 0.9, note: 'Hold above support' },
 ];
 
+const MAX_CHAT_HISTORY_TURNS = 20;
+
+function buildConversationHistory(messages: ChatMessage[]) {
+  return messages
+    .filter((message) => message.includeInHistory !== false && message.content.trim())
+    .slice(-MAX_CHAT_HISTORY_TURNS)
+    .map(({ role, content }) => ({
+      role,
+      content: content.trim(),
+    }));
+}
+
 export default function CletusAIPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: 'assistant',
       content:
         "Hey — I'm Cletus. Ask me about Solana tokens, signals, risk, or your setup. I'm software, not a human advisor. Trading can lose money.",
+      includeInHistory: false,
     },
   ]);
   const [input, setInput] = useState('');
@@ -90,11 +104,15 @@ export default function CletusAIPage() {
   const [liveStatus, setLiveStatus] = useState<'idle' | 'listening' | 'speaking' | 'error'>('idle');
   const [liveTranscript, setLiveTranscript] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef(messages);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const liveOnRef = useRef(false);
 
   useEffect(() => { liveOnRef.current = liveOn; }, [liveOn]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -146,6 +164,7 @@ export default function CletusAIPage() {
     if (!text || loading) return;
     setInput('');
     const next = [...messages, { role: 'user' as const, content: text }];
+    const history = buildConversationHistory(messages);
     setMessages(next);
     setLoading(true);
     try {
@@ -154,7 +173,7 @@ export default function CletusAIPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: text,
-          history: next.slice(-20),
+          history,
         }),
       });
       const data = await res.json();
@@ -236,13 +255,14 @@ export default function CletusAIPage() {
       setLiveStatus('speaking');
 
       const userLine = finalText.trim();
+      const history = buildConversationHistory(messagesRef.current);
       setMessages((prev) => [...prev, { role: 'user', content: userLine }]);
 
       try {
         const res = await fetch('/api/ai', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: userLine, voice: true }),
+          body: JSON.stringify({ message: userLine, history, voice: true }),
         });
         const data = await res.json();
         const answer =
