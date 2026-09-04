@@ -2,14 +2,20 @@ import { NextResponse } from 'next/server';
 
 interface DexScreenerPair {
   chainId: string;
+  dexId?: string;
+  pairAddress?: string;
   baseToken: { address: string; name: string; symbol: string };
+  quoteToken?: { address?: string; name?: string; symbol?: string };
   priceUsd: string;
   priceChange: { m5?: number; h1?: number; h24?: number };
   volume: { m5?: number; h1?: number; h24?: number };
   marketCap?: number;
   fdv?: number;
   liquidity?: { usd?: number };
-  txns?: { m5?: { buys: number; sells: number } };
+  txns?: {
+    m5?: { buys: number; sells: number };
+    h24?: { buys: number; sells: number };
+  };
 }
 
 interface DexScreenerBoost {
@@ -40,6 +46,13 @@ interface SearchTokenResult {
   change24h?: number;
   volume24h?: number;
   mcap?: number;
+  fdv?: number;
+  liquidityUsd?: number;
+  txns24h?: number;
+  dex?: string;
+  chain?: string;
+  quoteSymbol?: string;
+  pairAddress?: string;
 }
 
 // Simple in-memory cache
@@ -182,6 +195,29 @@ function buildSignals(pair: DexScreenerPair): string {
   return signals.slice(0, 3).join(' · ');
 }
 
+function getQuotePriority(pair: DexScreenerPair): number {
+  const quote = pair.quoteToken?.symbol?.trim().toUpperCase();
+  if (quote === 'USDC') return 4;
+  if (quote === 'USDT') return 3;
+  if (quote?.includes('USD')) return 2;
+  return 1;
+}
+
+function compareSearchPairs(a: DexScreenerPair, b: DexScreenerPair): number {
+  const quoteScore = getQuotePriority(b) - getQuotePriority(a);
+  if (quoteScore !== 0) return quoteScore;
+  return (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0);
+}
+
+function formatDexLabel(dexId?: string): string {
+  if (!dexId) return 'Unknown';
+  return dexId
+    .split(/[-_]/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 async function fetchLiveTokens(): Promise<FormattedToken[]> {
   // Step 1: Get top boosted Solana tokens
   const boostRes = await fetch('https://api.dexscreener.com/token-boosts/top/v1', {
@@ -264,35 +300,55 @@ async function fetchSearchTokens(query: string): Promise<SearchTokenResult[]> {
   const payload = (await res.json()) as { pairs?: DexScreenerPair[] };
   const pairs = Array.isArray(payload.pairs) ? payload.pairs : [];
 
-  const seen = new Set<string>();
-  return pairs
+  const bestByAddress = new Map<string, DexScreenerPair>();
+
+  pairs
     .filter((pair) => {
       const address = pair.baseToken?.address?.trim();
       const symbol = pair.baseToken?.symbol?.trim();
       return pair.chainId === 'solana' && Boolean(address) && Boolean(symbol);
     })
-    .sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))
-    .filter((pair) => {
+    .forEach((pair) => {
       const address = pair.baseToken.address;
-      if (seen.has(address)) return false;
-      seen.add(address);
-      return true;
-    })
+      const current = bestByAddress.get(address);
+      if (!current || compareSearchPairs(pair, current) < 0) {
+        bestByAddress.set(address, pair);
+      }
+    });
+
+  return Array.from(bestByAddress.values())
+    .sort(compareSearchPairs)
     .slice(0, 20)
     .map((pair) => {
       const priceUsd = Number.parseFloat(pair.priceUsd ?? '');
-      const mcap = pair.marketCap ?? pair.fdv;
       const volume24h = pair.volume?.h24;
       const change24h = pair.priceChange?.h24;
+      const txns24h = pair.txns?.h24;
       return {
         id: pair.baseToken.address,
         symbol: pair.baseToken.symbol.toUpperCase(),
         name: pair.baseToken.name,
         address: pair.baseToken.address,
         priceUsd: Number.isFinite(priceUsd) ? priceUsd : undefined,
-        change24h,
-        volume24h,
-        mcap: typeof mcap === 'number' && Number.isFinite(mcap) ? mcap : undefined,
+        change24h: typeof change24h === 'number' && Number.isFinite(change24h) ? change24h : undefined,
+        volume24h: typeof volume24h === 'number' && Number.isFinite(volume24h) ? volume24h : undefined,
+        mcap:
+          typeof pair.marketCap === 'number' && Number.isFinite(pair.marketCap)
+            ? pair.marketCap
+            : undefined,
+        fdv: typeof pair.fdv === 'number' && Number.isFinite(pair.fdv) ? pair.fdv : undefined,
+        liquidityUsd:
+          typeof pair.liquidity?.usd === 'number' && Number.isFinite(pair.liquidity.usd)
+            ? pair.liquidity.usd
+            : undefined,
+        txns24h:
+          txns24h && Number.isFinite(txns24h.buys) && Number.isFinite(txns24h.sells)
+            ? txns24h.buys + txns24h.sells
+            : undefined,
+        dex: formatDexLabel(pair.dexId),
+        chain: 'Solana',
+        quoteSymbol: pair.quoteToken?.symbol?.toUpperCase() || 'USDC',
+        pairAddress: pair.pairAddress,
       };
     });
 }
@@ -305,6 +361,9 @@ function fallbackSearchTokens(query: string): SearchTokenResult[] {
       symbol: token.name.replace(/^\$/, ''),
       name: token.fullName,
       address: token.address,
+      chain: 'Solana',
+      dex: 'Unknown',
+      quoteSymbol: 'USDC',
     }))
     .filter((token) => {
       if (!q) return true;
