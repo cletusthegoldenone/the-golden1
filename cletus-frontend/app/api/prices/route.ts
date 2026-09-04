@@ -3,6 +3,13 @@ import { NextResponse } from 'next/server';
 // ── Token mint addresses for DexScreener price lookup ─────────────────────────
 
 const PAIR_MINTS: Record<string, string> = {
+  'SOL/USDC':  'So11111111111111111111111111111111111111112',
+  'JTO/USDC':  '4GZgPTyjAFhe1xmFbBPRnGJoD6F79G4pqKiuXABZiuAh',
+  'WIF/USDC':  'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
+  'BONK/USDC': 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
+  'PYTH/USDC': 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3',
+  'JUP/USDC':  'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
+  // Backward-compat aliases
   'SOL/USDT':  'So11111111111111111111111111111111111111112',
   'JTO/USDT':  '4GZgPTyjAFhe1xmFbBPRnGJoD6F79G4pqKiuXABZiuAh',
   'WIF/USDT':  'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
@@ -13,6 +20,13 @@ const PAIR_MINTS: Record<string, string> = {
 
 // Fallback base prices (used when DexScreener is unavailable)
 const FALLBACK_PRICES: Record<string, { base: number; vol: number }> = {
+  'SOL/USDC':  { base: 185, vol: 2.5 },
+  'JTO/USDC':  { base: 3.2, vol: 0.08 },
+  'WIF/USDC':  { base: 2.8, vol: 0.07 },
+  'BONK/USDC': { base: 0.000035, vol: 0.0000008 },
+  'PYTH/USDC': { base: 0.42, vol: 0.012 },
+  'JUP/USDC':  { base: 1.15, vol: 0.03 },
+  // Backward-compat aliases
   'SOL/USDT':  { base: 185, vol: 2.5 },
   'JTO/USDT':  { base: 3.2, vol: 0.08 },
   'WIF/USDT':  { base: 2.8, vol: 0.07 },
@@ -26,11 +40,24 @@ const FALLBACK_PRICES: Record<string, { base: number; vol: number }> = {
 interface DexPair {
   chainId: string;
   priceUsd: string;
+  quoteToken?: { symbol?: string };
   priceChange?: { h24?: number };
+  volume?: { h24?: number };
   liquidity?: { usd?: number };
 }
 
-async function fetchRealPrice(mint: string): Promise<{ price: number; change24h: number } | null> {
+function getQuotePriority(symbol?: string): number {
+  const quote = symbol?.trim().toUpperCase();
+  if (quote === 'USDC') return 4;
+  if (quote === 'SOL' || quote === 'WSOL') return 3;
+  if (quote === 'USDT') return 2;
+  if (quote?.includes('USD')) return 1;
+  return 0;
+}
+
+async function fetchRealPrice(
+  mint: string
+): Promise<{ price: number; change24h: number; volume24h: number; quoteSymbol: string } | null> {
   try {
     const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, {
       headers: { Accept: 'application/json' },
@@ -40,12 +67,18 @@ async function fetchRealPrice(mint: string): Promise<{ price: number; change24h:
     const data = await res.json() as { pairs?: DexPair[] };
     const pairs = (data.pairs ?? [])
       .filter((p) => p.chainId === 'solana' && parseFloat(p.priceUsd) > 0)
-      .sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0));
+      .sort((a, b) => {
+        const quoteDiff = getQuotePriority(b.quoteToken?.symbol) - getQuotePriority(a.quoteToken?.symbol);
+        if (quoteDiff !== 0) return quoteDiff;
+        return (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0);
+      });
     if (pairs.length === 0) return null;
     const top = pairs[0];
     return {
       price: parseFloat(top.priceUsd),
       change24h: top.priceChange?.h24 ?? 0,
+      volume24h: top.volume?.h24 ?? 0,
+      quoteSymbol: top.quoteToken?.symbol?.toUpperCase() || 'USDC',
     };
   } catch {
     return null;
@@ -57,6 +90,7 @@ async function fetchRealPrice(mint: string): Promise<{ price: number; change24h:
 function generateCandleSeries(
   endPrice: number,
   change24h: number,
+  volume24h: number,
   volatility: number,
   count: number,
   tfSeconds: number,
@@ -67,6 +101,11 @@ function generateCandleSeries(
   const totalCandles = count + 1;
   const candles = [];
   let price = startPrice;
+
+  const volumePerCandle =
+    volume24h > 0
+      ? (volume24h * tfSeconds) / 86_400
+      : Math.max(10_000, Math.min(500_000, endPrice * 50_000));
 
   for (let i = totalCandles; i >= 0; i--) {
     const t = now - i * tfSeconds;
@@ -81,7 +120,7 @@ function generateCandleSeries(
       high: Math.max(open, close) * (1 + Math.random() * 0.004),
       low: Math.min(open, close) * (1 - Math.random() * 0.004),
       close,
-      volume: Math.random() * 500_000 + 50_000,
+      volume: Math.max(0, volumePerCandle * (0.7 + Math.random() * 0.6)),
     });
     price = close;
   }
@@ -97,7 +136,7 @@ const CACHE_TTL_MS = 15_000;
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const pair       = searchParams.get('pair') || 'SOL/USDT';
+  const pair       = searchParams.get('pair') || 'SOL/USDC';
   const mintParam  = searchParams.get('mint') || '';
   const timeframe  = searchParams.get('timeframe') || '15m';
   const count      = Math.min(500, parseInt(searchParams.get('count') || '200', 10));
@@ -106,7 +145,7 @@ export async function GET(request: Request) {
     '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400, '1w': 604800,
   };
 
-  const fallback = FALLBACK_PRICES[pair] ?? FALLBACK_PRICES['SOL/USDT'];
+  const fallback = FALLBACK_PRICES[pair] ?? FALLBACK_PRICES['SOL/USDC'];
   const tfSeconds = timeframeSeconds[timeframe] ?? 900;
   const mint = mintParam || PAIR_MINTS[pair];
   const cacheKey = mint || pair;
@@ -126,14 +165,15 @@ export async function GET(request: Request) {
     }
   }
 
-  const endPrice  = realPrice?.price    ?? fallback.base;
+  const endPrice = realPrice?.price ?? fallback.base;
   const change24h = realPrice?.change24h ?? 0;
+  const volume24h = realPrice?.volume24h ?? 0;
   // Scale volatility proportionally to price magnitude
   // Scale volatility as 0.8% of price per candle — tuned to produce
   // micro-cap-like swings without being unrealistically spiky.
   const volatility = endPrice * 0.008;
 
-  const candles = generateCandleSeries(endPrice, change24h, volatility, count, tfSeconds);
+  const candles = generateCandleSeries(endPrice, change24h, volume24h, volatility, count, tfSeconds);
 
   return NextResponse.json({
     pair,
@@ -143,7 +183,7 @@ export async function GET(request: Request) {
     change24h,
     isLive: realPrice !== null,
     source: 'DexScreener / Helius',
-    quoteSymbol: 'USDC',
+    quoteSymbol: realPrice?.quoteSymbol || pair.split('/')[1] || 'USDC',
     lastUpdated: Date.now(),
   });
 }
