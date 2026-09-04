@@ -133,6 +133,30 @@ function formatPriceDisplay(value?: number) {
   return formatted === '—' ? formatted : `$${formatted}`;
 }
 
+function derivePriceFormat(candles: Candle[]): { precision: number; minMove: number } {
+  if (!candles.length) {
+    return { precision: 6, minMove: 0.000001 };
+  }
+
+  let minAbsPrice = Number.POSITIVE_INFINITY;
+  for (const candle of candles) {
+    const values = [candle.open, candle.high, candle.low, candle.close];
+    for (const value of values) {
+      const abs = Math.abs(value);
+      if (Number.isFinite(abs) && abs > 0 && abs < minAbsPrice) {
+        minAbsPrice = abs;
+      }
+    }
+  }
+
+  if (!Number.isFinite(minAbsPrice)) {
+    return { precision: 6, minMove: 0.000001 };
+  }
+
+  const precision = Math.min(12, Math.max(2, Math.ceil(-Math.log10(minAbsPrice)) + 2));
+  return { precision, minMove: Number(`1e-${precision}`) };
+}
+
 function formatPercent(value?: number) {
   if (value == null || !Number.isFinite(value)) return '—';
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
@@ -615,6 +639,11 @@ export default function TokenChartPage() {
           wickUpColor: '#10b981',
           wickDownColor: '#ef4444',
           priceLineVisible: false,
+          priceFormat: {
+            type: 'price',
+            precision: 6,
+            minMove: 0.000001,
+          },
         });
 
         const volumeSeries = chart.addHistogramSeries({
@@ -684,12 +713,27 @@ export default function TokenChartPage() {
       low: candle.low,
       close: candle.close,
     }));
+    const priceFormat = derivePriceFormat(displayedCandles);
 
     const chartVolume = displayedCandles.map((candle) => ({
       time: candle.time as unknown as import('lightweight-charts').Time,
       value: candle.volume ?? 0,
       color: candle.close >= candle.open ? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.35)',
     }));
+
+    (
+      candleSeriesRef.current as {
+        applyOptions?: (options: {
+          priceFormat?: { type: 'price'; precision: number; minMove: number };
+        }) => void;
+      }
+    ).applyOptions?.({
+      priceFormat: {
+        type: 'price',
+        precision: priceFormat.precision,
+        minMove: priceFormat.minMove,
+      },
+    });
 
     (candleSeriesRef.current as { setData: (data: unknown[]) => void }).setData(chartCandles);
     (volumeSeriesRef.current as { setData: (data: unknown[]) => void }).setData(chartVolume);
