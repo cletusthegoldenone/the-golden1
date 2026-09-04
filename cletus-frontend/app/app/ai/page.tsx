@@ -267,6 +267,11 @@ export default function CletusAIPage() {
       setLiveTranscript(finalText.trim());
       setLiveStatus('speaking');
       voiceRequestInFlightRef.current = true;
+      try {
+        recognition.stop();
+      } catch {
+        // ignore stop race
+      }
 
       const userLine = finalText.trim();
       const { history } = queueUserMessage(userLine);
@@ -288,19 +293,27 @@ export default function CletusAIPage() {
         speak(fail);
       } finally {
         voiceRequestInFlightRef.current = false;
+        if (recognitionRef.current && liveOnRef.current) {
+          try {
+            recognition.start();
+          } catch {
+            // ignore restart race
+          }
+        }
       }
     };
 
     recognition.onerror = () => {
       setLiveStatus('error');
       setLiveTranscript('Mic error — check permissions or use text chat.');
+    voiceRequestInFlightRef.current = false;
     };
 
     recognition.onend = () => {
-      if (recognitionRef.current && liveOnRef.current) {
-        try {
-          recognition.start();
-        } catch {
+    if (recognitionRef.current && liveOnRef.current && !voiceRequestInFlightRef.current) {
+      try {
+        recognition.start();
+      } catch {
           // ignore restart race
         }
       }
