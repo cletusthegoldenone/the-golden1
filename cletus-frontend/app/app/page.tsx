@@ -291,7 +291,6 @@ export default function AppDashboardPage() {
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {[
                 { href: '/app/trade', label: 'Active Trade', icon: '▶' },
-                { href: '/app/config', label: 'Trading Config', icon: '⚙️' },
                 { href: '/app/chart', label: 'Chart', icon: '📈' },
                 { href: '/app/signals', label: 'Signals', icon: '⚡' },
                 { href: '/app/ai', label: 'Cletus AI', icon: '🤖' },
@@ -324,7 +323,6 @@ export default function AppDashboardPage() {
           {[
             { href: '/app', label: 'Dashboard', icon: '📊' },
             { href: '/app/trade', label: 'Trade', icon: '▶' },
-            { href: '/app/config', label: 'Config', icon: '⚙️' },
             { href: '/app/chart', label: 'Chart', icon: '📈' },
             { href: '/app/signals', label: 'Signals', icon: '⚡' },
             { href: '/app/ai', label: 'Cletus AI', icon: '🤖' },
