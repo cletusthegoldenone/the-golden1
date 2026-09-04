@@ -1,12 +1,6 @@
 'use client';
 
-/**
- * Token Chart page — look up any token
- * Black background, logo on every page. Quote context: USDC.
- * Route: /app/chart
- */
-
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 
@@ -20,6 +14,14 @@ type TokenResult = {
   change24h?: number;
   volume24h?: number;
   mcap?: number;
+  fdv?: number;
+  liquidityUsd?: number;
+  txns24h?: number;
+  holders?: number;
+  dex?: string;
+  chain?: string;
+  quoteSymbol?: string;
+  pairAddress?: string;
 };
 
 type Candle = {
@@ -31,18 +33,58 @@ type Candle = {
   volume?: number;
 };
 
-function formatUsd(n: number) {
-  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-  if (n >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
-  return `$${n.toFixed(2)}`;
+type Range = '1m' | '5m' | '15m' | '1H' | '4H' | '1D' | '1W';
+
+const RANGE_CONFIG: Record<Range, { timeframe: string; count: string }> = {
+  '1m': { timeframe: '1m', count: '120' },
+  '5m': { timeframe: '5m', count: '120' },
+  '15m': { timeframe: '15m', count: '120' },
+  '1H': { timeframe: '1h', count: '120' },
+  '4H': { timeframe: '4h', count: '120' },
+  '1D': { timeframe: '1d', count: '90' },
+  '1W': { timeframe: '1w', count: '104' },
+};
+
+function formatUsd(value?: number) {
+  if (value == null || !Number.isFinite(value)) return '—';
+  const abs = Math.abs(value);
+  if (abs >= 1e9) return `$${(value / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `$${(value / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `$${(value / 1e3).toFixed(1)}K`;
+  return `$${value.toFixed(2)}`;
 }
 
-function formatPrice(n: number) {
-  if (n < 0.0001) return n.toExponential(2);
-  if (n < 0.01) return n.toFixed(6);
-  if (n < 1) return n.toFixed(4);
-  return n.toFixed(2);
+function formatPrice(value?: number) {
+  if (value == null || !Number.isFinite(value)) return '—';
+  if (value < 0.0001) return value.toExponential(2);
+  if (value < 0.01) return value.toFixed(6);
+  if (value < 1) return value.toFixed(4);
+  if (value < 1000) return value.toFixed(2);
+  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function formatPriceDisplay(value?: number) {
+  const formatted = formatPrice(value);
+  return formatted === '—' ? formatted : `$${formatted}`;
+}
+
+function formatPercent(value?: number) {
+  if (value == null || !Number.isFinite(value)) return '—';
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+}
+
+function formatCount(value?: number) {
+  if (value == null || !Number.isFinite(value)) return '—';
+  if (value >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
+  if (value >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
+  if (value >= 1e3) return `${(value / 1e3).toFixed(1)}K`;
+  return value.toFixed(0);
+}
+
+function truncateAddress(value?: string) {
+  if (!value) return '—';
+  if (value.length <= 12) return value;
+  return `${value.slice(0, 4)}…${value.slice(-4)}`;
 }
 
 export default function TokenChartPage() {
@@ -53,61 +95,76 @@ export default function TokenChartPage() {
   const [selected, setSelected] = useState<TokenResult | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
-  const [range, setRange] = useState<'1H' | '4H' | '1D' | '1W' | '1M'>('1D');
+  const [range, setRange] = useState<Range>('15m');
   const [error, setError] = useState('');
+  const [chartSource, setChartSource] = useState('DexScreener / Helius');
+  const [chartReady, setChartReady] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<ReturnType<typeof import('lightweight-charts')['createChart']> | null>(null);
+  const candleSeriesRef = useRef<unknown>(null);
+  const volumeSeriesRef = useRef<unknown>(null);
 
-  // Search any token by name, symbol, or mint address
-  const searchTokens = useCallback(async (q: string) => {
-    const trimmed = q.trim();
-    if (trimmed.length < 1) {
+  const searchTokens = useCallback(async (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
       setResults([]);
       setHasSearched(false);
       setSearching(false);
       setError('');
       return;
     }
+
     setSearching(true);
     setError('');
     setHasSearched(true);
+
     try {
       const res = await fetch(`/api/tokens?q=${encodeURIComponent(trimmed)}`);
-      if (res.ok) {
-        const data = await res.json();
-        const list = Array.isArray(data.tokens)
-          ? data.tokens
-          : Array.isArray(data.results)
-            ? data.results
-            : [];
-        const normalized = list
-          .map((item: Partial<TokenResult>) => {
-            const symbol = typeof item.symbol === 'string' ? item.symbol.trim() : '';
-            const name = typeof item.name === 'string' ? item.name.trim() : '';
-            const address = typeof item.address === 'string' ? item.address.trim() : '';
-            const id = typeof item.id === 'string' ? item.id.trim() : address || symbol || name;
-            if (!id || (!symbol && !name && !address)) return null;
-            return {
-              id,
-              symbol: symbol || name || address.slice(0, 6),
-              name: name || symbol || 'Unknown token',
-              address,
-              image: typeof item.image === 'string' ? item.image : undefined,
-              priceUsd: typeof item.priceUsd === 'number' ? item.priceUsd : undefined,
-              change24h: typeof item.change24h === 'number' ? item.change24h : undefined,
-              volume24h: typeof item.volume24h === 'number' ? item.volume24h : undefined,
-              mcap: typeof item.mcap === 'number' ? item.mcap : undefined,
-            } satisfies TokenResult;
-          })
-          .filter((item: TokenResult | null): item is TokenResult => Boolean(item));
-        setResults(normalized);
-        if (normalized.length === 0) {
-          setError('No token matches found. Try symbol or mint address.');
-        }
-      } else {
+      if (!res.ok) {
         setResults([]);
         setError('Search unavailable. Try again.');
+        return;
       }
+
+      const data = await res.json();
+      const list = Array.isArray(data.tokens)
+        ? data.tokens
+        : Array.isArray(data.results)
+          ? data.results
+          : [];
+
+      const normalized = list
+        .map((item: Partial<TokenResult>) => {
+          const symbol = typeof item.symbol === 'string' ? item.symbol.trim() : '';
+          const name = typeof item.name === 'string' ? item.name.trim() : '';
+          const address = typeof item.address === 'string' ? item.address.trim() : '';
+          const id = typeof item.id === 'string' ? item.id.trim() : address || symbol || name;
+          if (!id || (!symbol && !name && !address)) return null;
+
+          return {
+            id,
+            symbol: symbol || name || address.slice(0, 6),
+            name: name || symbol || 'Unknown token',
+            address,
+            image: typeof item.image === 'string' ? item.image : undefined,
+            priceUsd: typeof item.priceUsd === 'number' ? item.priceUsd : undefined,
+            change24h: typeof item.change24h === 'number' ? item.change24h : undefined,
+            volume24h: typeof item.volume24h === 'number' ? item.volume24h : undefined,
+            mcap: typeof item.mcap === 'number' ? item.mcap : undefined,
+            fdv: typeof item.fdv === 'number' ? item.fdv : undefined,
+            liquidityUsd: typeof item.liquidityUsd === 'number' ? item.liquidityUsd : undefined,
+            txns24h: typeof item.txns24h === 'number' ? item.txns24h : undefined,
+            holders: typeof item.holders === 'number' ? item.holders : undefined,
+            dex: typeof item.dex === 'string' ? item.dex : 'Unknown',
+            chain: typeof item.chain === 'string' ? item.chain : 'Solana',
+            quoteSymbol: 'USDC',
+            pairAddress: typeof item.pairAddress === 'string' ? item.pairAddress : undefined,
+          } satisfies TokenResult;
+        })
+        .filter((item: TokenResult | null): item is TokenResult => Boolean(item));
+
+      setResults(normalized);
     } catch {
       setResults([]);
       setError('Search failed. Check connection.');
@@ -116,49 +173,47 @@ export default function TokenChartPage() {
     }
   }, []);
 
-  const onQueryChange = (value: string) => {
-    setQuery(value);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => searchTokens(value), 300);
-  };
-
-  const loadChart = useCallback(async (token: TokenResult, r: typeof range) => {
-    const symbol = (token.symbol || '').replace(/^\$/, '').toUpperCase();
-    if (!symbol) {
+  const loadChart = useCallback(async (mint: string, symbol: string, nextRange: Range) => {
+    if (!mint) {
       setCandles([]);
-      setError('Token symbol missing. Pick a different token.');
+      setError('Token mint missing. Pick a different token.');
       return;
     }
 
+    const config = RANGE_CONFIG[nextRange];
     setChartLoading(true);
+    setCandles([]);
     setError('');
+
     try {
       const params = new URLSearchParams({
-        pair: `${symbol}/USDT`,
-        timeframe:
-          r === '1H' ? '1m' : r === '4H' ? '5m' : r === '1D' ? '15m' : r === '1W' ? '1h' : '4h',
-        count: r === '1M' ? '180' : r === '1W' ? '140' : '120',
+        mint,
+        pair: `${symbol.toUpperCase()}/USDC`,
+        timeframe: config.timeframe,
+        count: config.count,
       });
 
       const res = await fetch(`/api/prices?${params}`);
-      if (res.ok) {
-        const data = await res.json();
-        setCandles(Array.isArray(data.candles) ? data.candles : []);
-        if (data.currentPrice != null || data.change24h != null) {
-          setSelected((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  priceUsd: typeof data.currentPrice === 'number' ? data.currentPrice : prev.priceUsd,
-                  change24h: data.change24h ?? prev.change24h,
-                }
-              : prev
-          );
-        }
-      } else {
+      if (!res.ok) {
         setCandles([]);
         setError('Chart data unavailable for this token.');
+        return;
       }
+
+      const data = await res.json();
+      const nextCandles = Array.isArray(data.candles) ? data.candles : [];
+      setCandles(nextCandles);
+      setChartSource(typeof data.source === 'string' ? data.source : 'DexScreener / Helius');
+      setSelected((prev) =>
+        prev
+          ? {
+              ...prev,
+              priceUsd: typeof data.currentPrice === 'number' ? data.currentPrice : prev.priceUsd,
+              change24h: typeof data.change24h === 'number' ? data.change24h : prev.change24h,
+              quoteSymbol: 'USDC',
+            }
+          : prev
+      );
     } catch {
       setCandles([]);
       setError('Failed to load chart.');
@@ -167,301 +222,374 @@ export default function TokenChartPage() {
     }
   }, []);
 
-  const selectToken = (token: TokenResult) => {
-    setSelected(token);
+  const selectToken = useCallback((token: TokenResult) => {
+    setSelected({ ...token, quoteSymbol: 'USDC' });
     setResults([]);
     setQuery(token.symbol || token.name);
-    loadChart(token, range);
-  };
+    setHasSearched(false);
+    setError('');
+  }, []);
 
   useEffect(() => {
-    if (selected) loadChart(selected, range);
-  }, [range]); // eslint-disable-line react-hooks/exhaustive-deps
+    const mint = selected?.address?.trim();
+    const symbol = selected?.symbol?.trim();
+    if (mint && symbol) {
+      void loadChart(mint, symbol, range);
+    }
+  }, [loadChart, range, selected?.address, selected?.symbol]);
 
-  // Simple sparkline / bar chart from candles (no external chart lib required)
-  const chartMin = candles.length
-    ? Math.min(...candles.map((c) => c.low))
-    : 0;
-  const chartMax = candles.length
-    ? Math.max(...candles.map((c) => c.high))
-    : 1;
-  const chartSpan = chartMax - chartMin || 1;
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!selected || !chartContainerRef.current) return;
+
+    let resizeObserver: ResizeObserver | null = null;
+    let mounted = true;
+
+    const initChart = async () => {
+      try {
+        const { ColorType, CrosshairMode, createChart } = await import('lightweight-charts');
+        if (!mounted || !chartContainerRef.current) return;
+
+        if (chartRef.current) {
+          chartRef.current.remove();
+        }
+
+        const chart = createChart(chartContainerRef.current, {
+          width: chartContainerRef.current.clientWidth,
+          height: chartContainerRef.current.clientHeight,
+          layout: {
+            background: { type: ColorType.Solid, color: '#000000' },
+            textColor: '#7f8c8d',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          },
+          grid: {
+            vertLines: { color: 'rgba(255,255,255,0.08)' },
+            horzLines: { color: 'rgba(255,255,255,0.08)' },
+          },
+          crosshair: {
+            mode: CrosshairMode.Normal,
+          },
+          rightPriceScale: {
+            borderColor: 'rgba(255,255,255,0.12)',
+          },
+          timeScale: {
+            borderColor: 'rgba(255,255,255,0.12)',
+            timeVisible: true,
+            secondsVisible: false,
+          },
+        });
+
+        const candleSeries = chart.addCandlestickSeries({
+          upColor: '#10b981',
+          downColor: '#ef4444',
+          borderUpColor: '#10b981',
+          borderDownColor: '#ef4444',
+          wickUpColor: '#10b981',
+          wickDownColor: '#ef4444',
+          priceLineVisible: false,
+        });
+
+        const volumeSeries = chart.addHistogramSeries({
+          priceScaleId: 'volume',
+          priceFormat: { type: 'volume' },
+        });
+
+        chart.priceScale('volume').applyOptions({
+          scaleMargins: { top: 0.76, bottom: 0 },
+          borderVisible: false,
+        });
+
+        chartRef.current = chart;
+        candleSeriesRef.current = candleSeries;
+        volumeSeriesRef.current = volumeSeries;
+        setChartReady(true);
+
+        resizeObserver = new ResizeObserver(() => {
+          if (!chartContainerRef.current || !chartRef.current) return;
+          chartRef.current.applyOptions({
+            width: chartContainerRef.current.clientWidth,
+            height: chartContainerRef.current.clientHeight,
+          });
+        });
+
+        resizeObserver.observe(chartContainerRef.current);
+      } catch {
+        setError((prev) => prev || 'Chart renderer unavailable.');
+      }
+    };
+
+    void initChart();
+
+    return () => {
+      mounted = false;
+      resizeObserver?.disconnect();
+      setChartReady(false);
+      if (chartRef.current) {
+        chartRef.current.remove();
+        chartRef.current = null;
+      }
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+    };
+  }, [selected]);
+
+  useEffect(() => {
+    if (!candleSeriesRef.current || !volumeSeriesRef.current || !chartRef.current || !chartReady) return;
+
+    if (!candles.length) {
+      (candleSeriesRef.current as { setData: (data: unknown[]) => void }).setData([]);
+      (volumeSeriesRef.current as { setData: (data: unknown[]) => void }).setData([]);
+      return;
+    }
+
+    const chartCandles = candles.map((candle) => ({
+      time: candle.time as unknown as import('lightweight-charts').Time,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+    }));
+
+    const chartVolume = candles.map((candle) => ({
+      time: candle.time as unknown as import('lightweight-charts').Time,
+      value: candle.volume ?? 0,
+      color: candle.close >= candle.open ? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.35)',
+    }));
+
+    (candleSeriesRef.current as { setData: (data: unknown[]) => void }).setData(chartCandles);
+    (volumeSeriesRef.current as { setData: (data: unknown[]) => void }).setData(chartVolume);
+    chartRef.current.timeScale().fitContent();
+  }, [candles, chartReady]);
+
+  const metricItems = useMemo(() => {
+    if (!selected) return [];
+
+    const items = [
+      { label: 'Market Cap', value: formatUsd(selected.mcap) },
+      { label: 'FDV', value: formatUsd(selected.fdv) },
+      { label: 'Liquidity', value: formatUsd(selected.liquidityUsd) },
+      { label: '24h Volume', value: formatUsd(selected.volume24h) },
+      { label: '24h Txns', value: formatCount(selected.txns24h) },
+    ];
+
+    if (selected.holders != null) {
+      items.push({ label: 'Holders', value: formatCount(selected.holders) });
+    }
+
+    return items;
+  }, [selected]);
+
+  const lastCandle = candles.length > 0 ? candles[candles.length - 1] : null;
 
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col">
-      {/* Logo on every page */}
-      <header className="border-b border-white/10 px-6 py-4">
-        <div className="max-w-4xl mx-auto flex items-center justify-between gap-4">
-          <Link href="/app" className="flex items-center gap-3">
+    <div className="min-h-screen bg-black text-white">
+      <header className="border-b border-white/10 px-3 py-3 sm:px-5">
+        <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center gap-3">
+          <Link href="/app" className="flex items-center gap-2 shrink-0">
             <Image
               src="/cletus-logo.png"
               alt="Cletus"
-              width={40}
-              height={40}
+              width={34}
+              height={34}
               className="object-contain"
               priority
             />
-            <div>
-              <div className="font-bold text-lg tracking-tight leading-none">Cletus</div>
-              <div className="text-xs text-white/50 mt-0.5">Token chart</div>
-            </div>
+            <span className="text-sm font-semibold uppercase tracking-[0.22em] text-white/90">
+              Chart
+            </span>
           </Link>
-          <nav className="flex items-center gap-3 text-xs">
-            <Link href="/app/signals" className="text-white/50 hover:text-white transition-colors">
-              Signals
-            </Link>
-            <Link href="/app/wallet" className="text-white/50 hover:text-white transition-colors">
-              Wallet
-            </Link>
-          </nav>
+
+          <div className="relative min-w-[260px] flex-1">
+            <input
+              type="text"
+              value={query}
+              onChange={(event) => {
+                const value = event.target.value;
+                setQuery(value);
+                if (debounceRef.current) clearTimeout(debounceRef.current);
+                debounceRef.current = setTimeout(() => {
+                  void searchTokens(value);
+                }, 250);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && results[0]) {
+                  selectToken(results[0]);
+                }
+              }}
+              placeholder="Search symbol or mint address"
+              className="h-10 w-full border border-white/15 bg-black px-3 pr-10 text-sm text-white outline-none placeholder:text-white/35 focus:border-emerald-400 font-mono"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[10px] uppercase tracking-[0.18em] text-white/40">
+              {searching ? 'scan' : 'find'}
+            </div>
+
+            {results.length > 0 && (
+              <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden border border-white/15 bg-black shadow-2xl">
+                <div className="grid grid-cols-[1.1fr_1.8fr_1fr_0.8fr] gap-3 border-b border-white/10 px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-white/40">
+                  <span>Symbol</span>
+                  <span>Name</span>
+                  <span className="text-right">Price</span>
+                  <span className="text-right">24h</span>
+                </div>
+                <ul className="max-h-80 overflow-y-auto">
+                  {results.map((token) => (
+                    <li key={token.id}>
+                      <button
+                        type="button"
+                        onClick={() => selectToken(token)}
+                        className="grid w-full grid-cols-[1.1fr_1.8fr_1fr_0.8fr] gap-3 border-b border-white/5 px-3 py-2 text-left text-sm transition-colors hover:bg-white/5"
+                      >
+                        <span className="truncate font-semibold">{token.symbol}</span>
+                        <span className="truncate text-white/65">{token.name}</span>
+                        <span className="text-right font-mono text-white/80">
+                          {formatPriceDisplay(token.priceUsd)}
+                        </span>
+                        <span
+                          className={`text-right font-mono ${
+                            (token.change24h ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
+                          }`}
+                        >
+                          {formatPercent(token.change24h)}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.18em]">
+            <span className="border border-white/15 px-2.5 py-2 text-white/80">USDC</span>
+            <span className="inline-flex items-center gap-2 border border-emerald-400/40 px-2.5 py-2 text-emerald-400">
+              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+              LIVE
+            </span>
+          </div>
         </div>
       </header>
 
-      <main className="flex-1 px-6 py-8">
-        <div className="max-w-4xl mx-auto space-y-6">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Token Chart</h1>
-            <p className="text-sm text-white/50 mt-1">
-              Look up <strong className="text-white/70">any token</strong> by name, symbol, or
-              mint address · Prices in USDC context
-            </p>
-          </div>
+      <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-4 px-3 py-4 sm:px-5 sm:py-5">
+        {error && <div className="border border-red-500/30 px-3 py-2 text-sm text-red-400">{error}</div>}
 
-          {/* Search any token */}
-          <div className="relative">
-            <label className="block text-xs font-medium text-white/50 mb-1.5">
-              Search any token
-            </label>
-            <div className="flex gap-2">
-              <input
-                ref={inputRef}
-                type="text"
-                value={query}
-                onChange={(e) => onQueryChange(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && results[0]) selectToken(results[0]);
-                }}
-                placeholder="e.g. SOL, BONK, or paste mint address…"
-                className="flex-1 border border-white/15 rounded-xl px-4 py-3 text-sm bg-black text-white focus:outline-none focus:border-emerald-500/50 placeholder:text-white/30 font-mono"
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <button
-                type="button"
-                onClick={() => searchTokens(query)}
-                className="px-4 py-3 rounded-xl text-sm font-semibold border border-white/15 text-white/80 hover:bg-white/5 transition-all"
-              >
-                {searching ? '…' : 'Search'}
-              </button>
-            </div>
-
-            {/* Dropdown results — any token match */}
-            {results.length > 0 && (
-              <ul className="absolute z-20 left-0 right-0 mt-2 max-h-64 overflow-y-auto rounded-xl border border-white/15 bg-[#0a0a0a] shadow-xl">
-                {results.map((t) => (
-                  <li key={t.id || t.address || t.symbol}>
-                    <button
-                      type="button"
-                      onClick={() => selectToken(t)}
-                      className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-white/5 transition-colors border-b border-white/5 last:border-0"
-                    >
-                      {t.image ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={t.image} alt="" className="w-7 h-7 rounded-full" />
-                      ) : (
-                        <div className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center text-xs font-bold">
-                          {(t.symbol || '?').slice(0, 2)}
-                        </div>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="font-semibold text-sm">
-                          {t.symbol}{' '}
-                          <span className="text-white/40 font-normal">{t.name}</span>
-                        </div>
-                        {t.address && (
-                          <div className="text-xs text-white/30 font-mono truncate">
-                            {t.address}
-                          </div>
-                        )}
+        {selected ? (
+          <>
+            <section className="border border-white/10 bg-black px-4 py-4">
+              <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-3">
+                    {selected.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={selected.image} alt="" className="h-11 w-11 rounded-full border border-white/10" />
+                    ) : (
+                      <div className="flex h-11 w-11 items-center justify-center border border-white/10 text-sm font-semibold">
+                        {(selected.symbol || '?').slice(0, 2)}
                       </div>
-                      {t.priceUsd != null && (
-                        <div className="text-xs font-mono text-white/60">
-                          ${formatPrice(t.priceUsd)}
-                        </div>
-                      )}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {hasSearched && !searching && results.length === 0 && (
-            <div className="mt-2 rounded-xl border border-white/15 bg-[#0a0a0a] px-4 py-3 text-xs text-white/50">
-              No token results yet. Try a ticker like <span className="text-white/70">BONK</span>{' '}
-              or paste a mint address.
-            </div>
-            )}
-          </div>
-
-          {error && (
-            <p className="text-sm text-red-400">{error}</p>
-          )}
-
-          {/* Selected token + chart */}
-          {selected && (
-            <div className="space-y-4">
-              <div className="rounded-xl border border-white/10 bg-white/5 p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  {selected.image ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={selected.image}
-                      alt=""
-                      className="w-10 h-10 rounded-full"
-                    />
-                  ) : (
-                    <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center font-bold">
-                      {(selected.symbol || '?').slice(0, 2)}
+                    )}
+                    <div className="min-w-0">
+                      <div className="truncate text-xs uppercase tracking-[0.18em] text-white/45">
+                        {selected.name}
+                      </div>
+                      <div className="font-mono text-3xl font-semibold tracking-tight sm:text-4xl">
+                        {selected.symbol} / USDC
+                      </div>
                     </div>
-                  )}
-                  <div>
-                    <div className="font-bold text-lg">
-                      {selected.symbol}
-                      <span className="text-white/40 font-normal text-sm ml-2">
-                        / USDC
-                      </span>
-                    </div>
-                    <div className="text-sm text-white/50">{selected.name}</div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs uppercase tracking-[0.14em] text-white/50">
+                    <span>{selected.chain || 'Solana'}</span>
+                    <span>{selected.dex || 'Unknown DEX'}</span>
+                    <span className="font-mono">{truncateAddress(selected.address)}</span>
                   </div>
                 </div>
-                <div className="text-right font-mono">
-                  {selected.priceUsd != null && (
-                    <div className="text-xl font-bold">
-                      ${formatPrice(selected.priceUsd)}
-                    </div>
-                  )}
-                  {selected.change24h != null && (
-                    <div
-                      className={`text-sm ${
-                        selected.change24h >= 0 ? 'text-emerald-400' : 'text-red-400'
-                      }`}
-                    >
-                      {selected.change24h >= 0 ? '+' : ''}
-                      {selected.change24h.toFixed(2)}% 24h
-                    </div>
-                  )}
-                </div>
-              </div>
 
-              {/* Stats row */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
-                <div className="rounded-lg border border-white/10 bg-black/40 p-3">
-                  <div className="text-xs text-white/40">24h volume</div>
-                  <div className="font-mono mt-0.5">
-                    {selected.volume24h != null
-                      ? formatUsd(selected.volume24h)
-                      : '—'}
+                <div className="text-left md:text-right">
+                  <div className="font-mono text-4xl font-semibold tracking-tight sm:text-5xl">
+                    {formatPriceDisplay(selected.priceUsd)}
                   </div>
-                </div>
-                <div className="rounded-lg border border-white/10 bg-black/40 p-3">
-                  <div className="text-xs text-white/40">Market cap</div>
-                  <div className="font-mono mt-0.5">
-                    {selected.mcap != null ? formatUsd(selected.mcap) : '—'}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-white/10 bg-black/40 p-3 col-span-2 sm:col-span-1">
-                  <div className="text-xs text-white/40">Mint / id</div>
-                  <div className="font-mono mt-0.5 text-xs truncate">
-                    {selected.address || selected.id || '—'}
-                  </div>
-                </div>
-              </div>
-
-              {/* Range tabs */}
-              <div className="flex flex-wrap gap-2">
-                {(['1H', '4H', '1D', '1W', '1M'] as const).map((r) => (
-                  <button
-                    key={r}
-                    type="button"
-                    onClick={() => setRange(r)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-mono border transition-all ${
-                      range === r
-                        ? 'border-emerald-500 text-emerald-400 bg-emerald-500/10'
-                        : 'border-white/10 text-white/50 hover:border-white/30'
+                  <div
+                    className={`mt-1 font-mono text-lg ${
+                      (selected.change24h ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
                     }`}
                   >
-                    {r}
-                  </button>
+                    {formatPercent(selected.change24h)}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="overflow-x-auto">
+              <div
+                className="grid min-w-[720px] gap-px border border-white/10 bg-white/10"
+                style={{ gridTemplateColumns: `repeat(${metricItems.length || 1}, minmax(0, 1fr))` }}
+              >
+                {metricItems.map((item) => (
+                  <div key={item.label} className="bg-black px-3 py-3">
+                    <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">{item.label}</div>
+                    <div className="mt-1 font-mono text-sm text-white/90 sm:text-base">{item.value}</div>
+                  </div>
                 ))}
               </div>
+            </section>
 
-              {/* Chart area */}
-              <div className="rounded-xl border border-white/10 bg-[#0a0a0a] p-4 min-h-[220px]">
+            <section className="flex flex-wrap gap-2">
+              {(Object.keys(RANGE_CONFIG) as Range[]).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setRange(item)}
+                  className={`border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.16em] transition-colors ${
+                    range === item
+                      ? 'border-emerald-400 text-emerald-400'
+                      : 'border-white/10 text-white/50 hover:border-white/35 hover:text-white'
+                  }`}
+                >
+                  {item}
+                </button>
+              ))}
+            </section>
+
+            <section className="border border-white/10 bg-black">
+              <div className="relative min-h-[240px] w-full md:min-h-[320px]">
+                <div ref={chartContainerRef} className="h-[240px] w-full md:h-[320px]" />
                 {chartLoading && (
-                  <div className="h-[200px] flex items-center justify-center text-white/30 text-sm">
-                    Loading chart…
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/75 font-mono text-sm text-white/45">
+                    Loading candles…
                   </div>
                 )}
                 {!chartLoading && candles.length === 0 && (
-                  <div className="h-[200px] flex items-center justify-center text-white/30 text-sm text-center px-4">
-                    No candle data yet. Connect `/api/tokens/chart` (CoinGecko / Birdeye) for
-                    live OHLC. You can still look up any token above.
-                  </div>
-                )}
-                {!chartLoading && candles.length > 0 && (
-                  <div className="h-[200px] flex items-end gap-px">
-                    {candles.map((c, i) => {
-                      const highPct = ((c.high - chartMin) / chartSpan) * 100;
-                      const lowPct = ((c.low - chartMin) / chartSpan) * 100;
-                      const openPct = ((c.open - chartMin) / chartSpan) * 100;
-                      const closePct = ((c.close - chartMin) / chartSpan) * 100;
-                      const up = c.close >= c.open;
-                      const bodyTop = Math.max(openPct, closePct);
-                      const bodyBottom = Math.min(openPct, closePct);
-                      return (
-                        <div
-                          key={c.time ?? i}
-                          className="flex-1 min-w-0 relative h-full"
-                          title={`O:${c.open} H:${c.high} L:${c.low} C:${c.close}`}
-                        >
-                          <div
-                            className={`absolute left-1/2 w-px -translate-x-1/2 ${
-                              up ? 'bg-emerald-500/60' : 'bg-red-500/60'
-                            }`}
-                            style={{
-                              bottom: `${lowPct}%`,
-                              height: `${Math.max(1, highPct - lowPct)}%`,
-                            }}
-                          />
-                          <div
-                            className={`absolute left-0 right-0 mx-auto w-[70%] max-w-[8px] ${
-                              up ? 'bg-emerald-500' : 'bg-red-500'
-                            }`}
-                            style={{
-                              bottom: `${bodyBottom}%`,
-                              height: `${Math.max(1, bodyTop - bodyBottom)}%`,
-                            }}
-                          />
-                        </div>
-                      );
-                    })}
+                  <div className="absolute inset-0 flex items-center justify-center px-4 text-center font-mono text-sm text-white/35">
+                    No candle data available for this token.
                   </div>
                 )}
               </div>
-            </div>
-          )}
 
-          {!selected && (
-            <div className="rounded-xl border border-white/10 bg-white/5 p-10 text-center text-white/40 text-sm">
-              Search any token above — by <strong className="text-white/60">name</strong>,{' '}
-              <strong className="text-white/60">symbol</strong>, or{' '}
-              <strong className="text-white/60">mint address</strong> — to open its chart.
-            </div>
-          )}
+              <div className="flex flex-col gap-2 border-t border-white/10 px-3 py-3 text-[11px] uppercase tracking-[0.16em] text-white/45 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-white/75">
+                  <span>O {lastCandle ? formatPrice(lastCandle.open) : '—'}</span>
+                  <span>H {lastCandle ? formatPrice(lastCandle.high) : '—'}</span>
+                  <span>L {lastCandle ? formatPrice(lastCandle.low) : '—'}</span>
+                  <span>C {lastCandle ? formatPrice(lastCandle.close) : '—'}</span>
+                </div>
+                <div className="font-mono text-white/45">SOURCE {chartSource}</div>
+              </div>
+            </section>
+          </>
+        ) : (
+          <section className="border border-white/10 px-4 py-10 text-center text-sm text-white/40">
+            Search by symbol or mint address to open a live USDC chart.
+          </section>
+        )}
 
-          <p className="text-xs text-white/30 text-center">
-            Charts are informational only. Not financial advice. Trading involves risk of loss.
-          </p>
-        </div>
+        {hasSearched && !searching && results.length === 0 && !selected && !error && (
+          <div className="border border-white/10 px-3 py-3 text-sm text-white/45">
+            No token results. Try a symbol or paste a mint address.
+          </div>
+        )}
       </main>
     </div>
   );

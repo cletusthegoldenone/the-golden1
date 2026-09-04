@@ -98,28 +98,30 @@ const CACHE_TTL_MS = 15_000;
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const pair       = searchParams.get('pair') || 'SOL/USDT';
+  const mintParam  = searchParams.get('mint') || '';
   const timeframe  = searchParams.get('timeframe') || '15m';
   const count      = Math.min(500, parseInt(searchParams.get('count') || '200', 10));
 
   const timeframeSeconds: Record<string, number> = {
-    '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400,
+    '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400, '1w': 604800,
   };
 
   const fallback = FALLBACK_PRICES[pair] ?? FALLBACK_PRICES['SOL/USDT'];
   const tfSeconds = timeframeSeconds[timeframe] ?? 900;
-  const mint = PAIR_MINTS[pair];
+  const mint = mintParam || PAIR_MINTS[pair];
+  const cacheKey = mint || pair;
 
   // Try to get a real current price
   let realPrice: { price: number; change24h: number } | null = null;
 
   if (mint) {
-    const cached = priceCache.get(pair);
+    const cached = priceCache.get(cacheKey);
     if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
       realPrice = { price: cached.price, change24h: cached.change24h };
     } else {
       realPrice = await fetchRealPrice(mint);
       if (realPrice) {
-        priceCache.set(pair, { ...realPrice, at: Date.now() });
+        priceCache.set(cacheKey, { ...realPrice, at: Date.now() });
       }
     }
   }
@@ -140,7 +142,8 @@ export async function GET(request: Request) {
     currentPrice: endPrice,
     change24h,
     isLive: realPrice !== null,
+    source: 'DexScreener / Helius',
+    quoteSymbol: 'USDC',
     lastUpdated: Date.now(),
   });
 }
-
