@@ -231,7 +231,17 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const message: string = body.message ?? body.question ?? '';
-    const rawHistory: { role?: string; content?: string }[] = Array.isArray(body.history) ? body.history : [];
+    const rawHistory: { role: string; content: string }[] = Array.isArray(body.history)
+      ? body.history
+          .filter(
+            (entry: unknown): entry is { role?: unknown; content?: unknown } =>
+              typeof entry === 'object' && entry !== null
+          )
+          .map((entry) => ({
+            role: typeof entry.role === 'string' ? entry.role : '',
+            content: typeof entry.content === 'string' ? entry.content : '',
+          }))
+      : [];
     const normalizedHistory = normalizeConversationHistory(
       rawHistory,
       message
