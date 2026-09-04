@@ -42,7 +42,7 @@ const RANGE_CONFIG: Record<Range, { timeframe: string; count: string }> = {
   '1H': { timeframe: '1h', count: '120' },
   '4H': { timeframe: '4h', count: '120' },
   '1D': { timeframe: '1d', count: '90' },
-  '1W': { timeframe: '1h', count: '168' },
+  '1W': { timeframe: '1w', count: '104' },
 };
 
 function formatUsd(value?: number) {
@@ -173,8 +173,7 @@ export default function TokenChartPage() {
     }
   }, []);
 
-  const loadChart = useCallback(async (token: TokenResult, nextRange: Range) => {
-    const mint = token.address?.trim();
+  const loadChart = useCallback(async (mint: string, symbol: string, nextRange: Range) => {
     if (!mint) {
       setCandles([]);
       setError('Token mint missing. Pick a different token.');
@@ -189,7 +188,7 @@ export default function TokenChartPage() {
     try {
       const params = new URLSearchParams({
         mint,
-        pair: `${token.symbol.toUpperCase()}/USDC`,
+        pair: `${symbol.toUpperCase()}/USDC`,
         timeframe: config.timeframe,
         count: config.count,
       });
@@ -232,10 +231,12 @@ export default function TokenChartPage() {
   }, []);
 
   useEffect(() => {
-    if (selected) {
-      void loadChart(selected, range);
+    const mint = selected?.address?.trim();
+    const symbol = selected?.symbol?.trim();
+    if (mint && symbol) {
+      void loadChart(mint, symbol, range);
     }
-  }, [loadChart, range, selected?.address]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loadChart, range, selected?.address, selected?.symbol]);
 
   useEffect(() => () => {
     if (debounceRef.current) clearTimeout(debounceRef.current);

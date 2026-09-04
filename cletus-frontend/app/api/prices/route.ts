@@ -103,7 +103,7 @@ export async function GET(request: Request) {
   const count      = Math.min(500, parseInt(searchParams.get('count') || '200', 10));
 
   const timeframeSeconds: Record<string, number> = {
-    '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400,
+    '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400, '1w': 604800,
   };
 
   const fallback = FALLBACK_PRICES[pair] ?? FALLBACK_PRICES['SOL/USDT'];
