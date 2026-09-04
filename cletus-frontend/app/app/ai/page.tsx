@@ -330,36 +330,36 @@ export default function CletusAIPage() {
         const answer =
           data.answer ?? data.message ?? "I didn't catch that. Try again.";
         appendMessage({ role: 'assistant', content: answer });
-      const didSpeak = speak(answer);
-      if (!didSpeak && liveOnRef.current) {
-        setLiveStatus('listening');
-        shouldRestartListening = true;
+        const didSpeak = speak(answer);
+        if (!didSpeak && liveOnRef.current) {
+          setLiveStatus('listening');
+          shouldRestartListening = true;
+        }
+      } catch {
+        const fail = 'Connection error on voice. Try text chat.';
+        appendMessage({ role: 'assistant', content: fail });
+        const didSpeak = speak(fail);
+        if (!didSpeak && liveOnRef.current) {
+          setLiveStatus('listening');
+          shouldRestartListening = true;
+        }
+      } finally {
+        voiceRequestInFlightRef.current = false;
+        if (shouldRestartListening || resumeRecognitionAfterSpeechRef.current) {
+          resumeRecognitionAfterSpeechRef.current = false;
+          restartRecognitionIfNeeded();
+        }
       }
-    } catch {
-      const fail = 'Connection error on voice. Try text chat.';
-      appendMessage({ role: 'assistant', content: fail });
-      const didSpeak = speak(fail);
-      if (!didSpeak && liveOnRef.current) {
-        setLiveStatus('listening');
-        shouldRestartListening = true;
-      }
-    } finally {
-      voiceRequestInFlightRef.current = false;
-      if (shouldRestartListening || resumeRecognitionAfterSpeechRef.current) {
-        resumeRecognitionAfterSpeechRef.current = false;
-        restartRecognitionIfNeeded();
-      }
-    }
     };
 
     recognition.onerror = () => {
-    setLiveStatus('error');
-    setLiveTranscript('Mic error — check permissions or use text chat.');
-    voiceRequestInFlightRef.current = false;
-    resumeRecognitionAfterSpeechRef.current = false;
-    liveOnRef.current = false;
-    setLiveOn(false);
-    suppressRecognitionRestartRef.current = true;
+      setLiveStatus('error');
+      setLiveTranscript('Mic error — check permissions or use text chat.');
+      voiceRequestInFlightRef.current = false;
+      resumeRecognitionAfterSpeechRef.current = false;
+      liveOnRef.current = false;
+      setLiveOn(false);
+      suppressRecognitionRestartRef.current = true;
     };
 
     recognition.onend = () => {
