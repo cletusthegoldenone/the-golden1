@@ -9,7 +9,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { flushSync } from 'react-dom';
 
 type ChatMessage = {
   role: 'user' | 'assistant';
@@ -106,6 +105,7 @@ export default function CletusAIPage() {
   const [liveTranscript, setLiveTranscript] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef(messages);
+  const voiceRequestInFlightRef = useRef(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const liveOnRef = useRef(false);
@@ -116,24 +116,16 @@ export default function CletusAIPage() {
   }, [messages]);
 
   const appendMessage = useCallback((message: ChatMessage) => {
-    setMessages((prev) => {
-      const next = [...prev, message];
-      messagesRef.current = next;
-      return next;
-    });
+    const next = [...messagesRef.current, message];
+    messagesRef.current = next;
+    setMessages(next);
   }, []);
 
   const queueUserMessage = useCallback((content: string) => {
     const userMessage: ChatMessage = { role: 'user', content };
-    let nextMessages = messagesRef.current;
-
-    flushSync(() => {
-      setMessages((prev) => {
-        nextMessages = [...prev, userMessage];
-        messagesRef.current = nextMessages;
-        return nextMessages;
-      });
-    });
+    const nextMessages = [...messagesRef.current, userMessage];
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
 
     return {
       history: buildConversationHistory(nextMessages).slice(0, -1),
@@ -227,6 +219,7 @@ export default function CletusAIPage() {
     setLiveOn(false);
     setLiveStatus('idle');
     setLiveTranscript('');
+    voiceRequestInFlightRef.current = false;
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -269,9 +262,11 @@ export default function CletusAIPage() {
         if (event.results[i].isFinal) finalText += piece;
       }
       if (!finalText.trim()) return;
+      if (voiceRequestInFlightRef.current) return;
 
       setLiveTranscript(finalText.trim());
       setLiveStatus('speaking');
+      voiceRequestInFlightRef.current = true;
 
       const userLine = finalText.trim();
       const { history } = queueUserMessage(userLine);
@@ -291,6 +286,8 @@ export default function CletusAIPage() {
         const fail = 'Connection error on voice. Try text chat.';
         appendMessage({ role: 'assistant', content: fail });
         speak(fail);
+      } finally {
+        voiceRequestInFlightRef.current = false;
       }
     };
 
