@@ -114,6 +114,13 @@ export default function CletusAIPage() {
     messagesRef.current = messages;
   }, [messages]);
 
+  const appendMessage = useCallback((message: ChatMessage) => {
+    const next = [...messagesRef.current, message];
+    messagesRef.current = next;
+    setMessages(next);
+    return next;
+  }, []);
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -163,9 +170,8 @@ export default function CletusAIPage() {
     const text = input.trim();
     if (!text || loading) return;
     setInput('');
-    const next = [...messages, { role: 'user' as const, content: text }];
-    const history = buildConversationHistory(messages);
-    setMessages(next);
+    const next = appendMessage({ role: 'user', content: text });
+    const history = buildConversationHistory(next).slice(0, -1);
     setLoading(true);
     try {
       const res = await fetch('/api/ai', {
@@ -177,18 +183,12 @@ export default function CletusAIPage() {
         }),
       });
       const data = await res.json();
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: data.answer ?? data.message ?? 'Something went wrong. Try again.',
-        },
-      ]);
+      appendMessage({
+      role: 'assistant',
+      content: data.answer ?? data.message ?? 'Something went wrong. Try again.',
+      });
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: 'Connection error. Please try again.' },
-      ]);
+      appendMessage({ role: 'assistant', content: 'Connection error. Please try again.' });
     } finally {
       setLoading(false);
     }
@@ -255,8 +255,8 @@ export default function CletusAIPage() {
       setLiveStatus('speaking');
 
       const userLine = finalText.trim();
-      const history = buildConversationHistory(messagesRef.current);
-      setMessages((prev) => [...prev, { role: 'user', content: userLine }]);
+      const next = appendMessage({ role: 'user', content: userLine });
+      const history = buildConversationHistory(next).slice(0, -1);
 
       try {
         const res = await fetch('/api/ai', {
@@ -267,11 +267,11 @@ export default function CletusAIPage() {
         const data = await res.json();
         const answer =
           data.answer ?? data.message ?? "I didn't catch that. Try again.";
-        setMessages((prev) => [...prev, { role: 'assistant', content: answer }]);
+        appendMessage({ role: 'assistant', content: answer });
         speak(answer);
       } catch {
         const fail = 'Connection error on voice. Try text chat.';
-        setMessages((prev) => [...prev, { role: 'assistant', content: fail }]);
+        appendMessage({ role: 'assistant', content: fail });
         speak(fail);
       }
     };
@@ -297,7 +297,7 @@ export default function CletusAIPage() {
     } catch {
       setLiveStatus('error');
     }
-  }, [liveOn]);
+  }, [appendMessage, liveOn]);
 
 
   useEffect(() => {
