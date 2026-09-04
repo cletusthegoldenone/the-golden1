@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
 
 type TokenResult = {
@@ -34,6 +33,7 @@ type Candle = {
 };
 
 type Range = '1m' | '5m' | '15m' | '1H' | '4H' | '1D' | '1W';
+type ViewMode = 'price' | 'mcap';
 
 const RANGE_CONFIG: Record<Range, { timeframe: string; count: string }> = {
   '1m': { timeframe: '1m', count: '120' },
@@ -44,6 +44,41 @@ const RANGE_CONFIG: Record<Range, { timeframe: string; count: string }> = {
   '1D': { timeframe: '1d', count: '90' },
   '1W': { timeframe: '1w', count: '104' },
 };
+
+const DEFAULT_SYMBOL = 'BONK';
+
+function normalizeTokenResults(list: unknown[]): TokenResult[] {
+  return list
+    .map((item) => {
+      const token = item as Partial<TokenResult>;
+      const symbol = typeof token.symbol === 'string' ? token.symbol.trim() : '';
+      const name = typeof token.name === 'string' ? token.name.trim() : '';
+      const address = typeof token.address === 'string' ? token.address.trim() : '';
+      const id = typeof token.id === 'string' ? token.id.trim() : address || symbol || name;
+      if (!id || (!symbol && !name && !address)) return null;
+
+      return {
+        id,
+        symbol: symbol || name || address.slice(0, 6),
+        name: name || symbol || 'Unknown token',
+        address,
+        image: typeof token.image === 'string' ? token.image : undefined,
+        priceUsd: typeof token.priceUsd === 'number' ? token.priceUsd : undefined,
+        change24h: typeof token.change24h === 'number' ? token.change24h : undefined,
+        volume24h: typeof token.volume24h === 'number' ? token.volume24h : undefined,
+        mcap: typeof token.mcap === 'number' ? token.mcap : undefined,
+        fdv: typeof token.fdv === 'number' ? token.fdv : undefined,
+        liquidityUsd: typeof token.liquidityUsd === 'number' ? token.liquidityUsd : undefined,
+        txns24h: typeof token.txns24h === 'number' ? token.txns24h : undefined,
+        holders: typeof token.holders === 'number' ? token.holders : undefined,
+        dex: typeof token.dex === 'string' ? token.dex : 'Unknown',
+        chain: typeof token.chain === 'string' ? token.chain : 'Solana',
+        quoteSymbol: 'USDC',
+        pairAddress: typeof token.pairAddress === 'string' ? token.pairAddress : undefined,
+      } satisfies TokenResult;
+    })
+    .filter((item: TokenResult | null): item is TokenResult => Boolean(item));
+}
 
 function formatUsd(value?: number) {
   if (value == null || !Number.isFinite(value)) return '—';
@@ -96,6 +131,7 @@ export default function TokenChartPage() {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
   const [range, setRange] = useState<Range>('15m');
+  const [viewMode, setViewMode] = useState<ViewMode>('price');
   const [error, setError] = useState('');
   const [chartSource, setChartSource] = useState('DexScreener / Helius');
   const [chartReady, setChartReady] = useState(false);
@@ -128,43 +164,12 @@ export default function TokenChartPage() {
       }
 
       const data = await res.json();
-      const list = Array.isArray(data.tokens)
+      const list: unknown[] = Array.isArray(data.tokens)
         ? data.tokens
         : Array.isArray(data.results)
           ? data.results
           : [];
-
-      const normalized = list
-        .map((item: Partial<TokenResult>) => {
-          const symbol = typeof item.symbol === 'string' ? item.symbol.trim() : '';
-          const name = typeof item.name === 'string' ? item.name.trim() : '';
-          const address = typeof item.address === 'string' ? item.address.trim() : '';
-          const id = typeof item.id === 'string' ? item.id.trim() : address || symbol || name;
-          if (!id || (!symbol && !name && !address)) return null;
-
-          return {
-            id,
-            symbol: symbol || name || address.slice(0, 6),
-            name: name || symbol || 'Unknown token',
-            address,
-            image: typeof item.image === 'string' ? item.image : undefined,
-            priceUsd: typeof item.priceUsd === 'number' ? item.priceUsd : undefined,
-            change24h: typeof item.change24h === 'number' ? item.change24h : undefined,
-            volume24h: typeof item.volume24h === 'number' ? item.volume24h : undefined,
-            mcap: typeof item.mcap === 'number' ? item.mcap : undefined,
-            fdv: typeof item.fdv === 'number' ? item.fdv : undefined,
-            liquidityUsd: typeof item.liquidityUsd === 'number' ? item.liquidityUsd : undefined,
-            txns24h: typeof item.txns24h === 'number' ? item.txns24h : undefined,
-            holders: typeof item.holders === 'number' ? item.holders : undefined,
-            dex: typeof item.dex === 'string' ? item.dex : 'Unknown',
-            chain: typeof item.chain === 'string' ? item.chain : 'Solana',
-            quoteSymbol: 'USDC',
-            pairAddress: typeof item.pairAddress === 'string' ? item.pairAddress : undefined,
-          } satisfies TokenResult;
-        })
-        .filter((item: TokenResult | null): item is TokenResult => Boolean(item));
-
-      setResults(normalized);
+      setResults(normalizeTokenResults(list));
     } catch {
       setResults([]);
       setError('Search failed. Check connection.');
@@ -240,6 +245,36 @@ export default function TokenChartPage() {
 
   useEffect(() => () => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const bootstrapDefaultToken = async () => {
+      setQuery(DEFAULT_SYMBOL);
+      try {
+        const res = await fetch(`/api/tokens?q=${encodeURIComponent(DEFAULT_SYMBOL)}`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const list: unknown[] = Array.isArray(data.tokens)
+          ? data.tokens
+          : Array.isArray(data.results)
+            ? data.results
+            : [];
+        const normalized = normalizeTokenResults(list);
+        if (!normalized.length || cancelled) return;
+        const preferred =
+          normalized.find((token) => token.symbol.toUpperCase() === DEFAULT_SYMBOL) ?? normalized[0];
+        setSelected({ ...preferred, quoteSymbol: 'USDC' });
+      } catch {
+        // no-op; empty chart state already handled
+      }
+    };
+
+    void bootstrapDefaultToken();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -336,16 +371,30 @@ export default function TokenChartPage() {
     };
   }, [selected]);
 
+  const displayedCandles = useMemo(() => {
+    if (viewMode === 'price') return candles;
+    if (!selected?.mcap || !selected.priceUsd || selected.priceUsd <= 0) return candles;
+    const ratio = selected.mcap / selected.priceUsd;
+    if (!Number.isFinite(ratio) || ratio <= 0) return candles;
+    return candles.map((candle) => ({
+      ...candle,
+      open: candle.open * ratio,
+      high: candle.high * ratio,
+      low: candle.low * ratio,
+      close: candle.close * ratio,
+    }));
+  }, [candles, selected?.mcap, selected?.priceUsd, viewMode]);
+
   useEffect(() => {
     if (!candleSeriesRef.current || !volumeSeriesRef.current || !chartRef.current || !chartReady) return;
 
-    if (!candles.length) {
+    if (!displayedCandles.length) {
       (candleSeriesRef.current as { setData: (data: unknown[]) => void }).setData([]);
       (volumeSeriesRef.current as { setData: (data: unknown[]) => void }).setData([]);
       return;
     }
 
-    const chartCandles = candles.map((candle) => ({
+    const chartCandles = displayedCandles.map((candle) => ({
       time: candle.time as unknown as import('lightweight-charts').Time,
       open: candle.open,
       high: candle.high,
@@ -353,7 +402,7 @@ export default function TokenChartPage() {
       close: candle.close,
     }));
 
-    const chartVolume = candles.map((candle) => ({
+    const chartVolume = displayedCandles.map((candle) => ({
       time: candle.time as unknown as import('lightweight-charts').Time,
       value: candle.volume ?? 0,
       color: candle.close >= candle.open ? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.35)',
@@ -362,17 +411,17 @@ export default function TokenChartPage() {
     (candleSeriesRef.current as { setData: (data: unknown[]) => void }).setData(chartCandles);
     (volumeSeriesRef.current as { setData: (data: unknown[]) => void }).setData(chartVolume);
     chartRef.current.timeScale().fitContent();
-  }, [candles, chartReady]);
+  }, [displayedCandles, chartReady]);
 
   const metricItems = useMemo(() => {
     if (!selected) return [];
 
     const items = [
-      { label: 'Market Cap', value: formatUsd(selected.mcap) },
+      { label: 'Mcap', value: formatUsd(selected.mcap) },
       { label: 'FDV', value: formatUsd(selected.fdv) },
-      { label: 'Liquidity', value: formatUsd(selected.liquidityUsd) },
-      { label: '24h Volume', value: formatUsd(selected.volume24h) },
-      { label: '24h Txns', value: formatCount(selected.txns24h) },
+      { label: 'Liq', value: formatUsd(selected.liquidityUsd) },
+      { label: 'Vol 24h', value: formatUsd(selected.volume24h) },
+      { label: 'Txns 24h', value: formatCount(selected.txns24h) },
     ];
 
     if (selected.holders != null) {
@@ -382,24 +431,17 @@ export default function TokenChartPage() {
     return items;
   }, [selected]);
 
-  const lastCandle = candles.length > 0 ? candles[candles.length - 1] : null;
+  const lastCandle = displayedCandles.length > 0 ? displayedCandles[displayedCandles.length - 1] : null;
+  const lastUpdateLabel = lastCandle
+    ? new Date(lastCandle.time * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '—';
 
   return (
     <div className="min-h-screen bg-black text-white">
       <header className="border-b border-white/10 px-3 py-3 sm:px-5">
-        <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center gap-3">
-          <Link href="/app" className="flex items-center gap-2 shrink-0">
-            <Image
-              src="/cletus-logo.png"
-              alt="Cletus"
-              width={34}
-              height={34}
-              className="object-contain"
-              priority
-            />
-            <span className="text-sm font-semibold uppercase tracking-[0.22em] text-white/90">
-              Chart
-            </span>
+        <div className="mx-auto flex w-full max-w-[1600px] flex-wrap items-center gap-3">
+          <Link href="/app" className="shrink-0 text-sm font-semibold tracking-[0.08em] text-white/90">
+            Cletus · Chart
           </Link>
 
           <div className="relative min-w-[260px] flex-1">
@@ -419,7 +461,7 @@ export default function TokenChartPage() {
                   selectToken(results[0]);
                 }
               }}
-              placeholder="Search symbol or mint address"
+              placeholder="search…"
               className="h-10 w-full border border-white/15 bg-black px-3 pr-10 text-sm text-white outline-none placeholder:text-white/35 focus:border-emerald-400 font-mono"
               autoComplete="off"
               spellCheck={false}
@@ -474,49 +516,36 @@ export default function TokenChartPage() {
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-4 px-3 py-4 sm:px-5 sm:py-5">
+      <main className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-3 px-3 py-4 sm:px-5 sm:py-5">
         {error && <div className="border border-red-500/30 px-3 py-2 text-sm text-red-400">{error}</div>}
 
         {selected ? (
           <>
-            <section className="border border-white/10 bg-black px-4 py-4">
-              <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <section className="border border-white/10 bg-black px-4 py-3">
+              <div className="flex flex-wrap items-end justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-3">
-                    {selected.image ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={selected.image} alt="" className="h-11 w-11 rounded-full border border-white/10" />
-                    ) : (
-                      <div className="flex h-11 w-11 items-center justify-center border border-white/10 text-sm font-semibold">
-                        {(selected.symbol || '?').slice(0, 2)}
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <div className="truncate text-xs uppercase tracking-[0.18em] text-white/45">
-                        {selected.name}
-                      </div>
-                      <div className="font-mono text-3xl font-semibold tracking-tight sm:text-4xl">
-                        {selected.symbol} / USDC
-                      </div>
-                    </div>
+                  <div className="font-mono text-xl font-semibold tracking-tight sm:text-2xl">
+                    {selected.symbol} / USDC
                   </div>
-                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs uppercase tracking-[0.14em] text-white/50">
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-white/50">
                     <span>{selected.chain || 'Solana'}</span>
+                    <span>·</span>
                     <span>{selected.dex || 'Unknown DEX'}</span>
-                    <span className="font-mono">{truncateAddress(selected.address)}</span>
+                    <span>·</span>
+                    <span className="font-mono">mint {truncateAddress(selected.address)}</span>
                   </div>
                 </div>
 
                 <div className="text-left md:text-right">
-                  <div className="font-mono text-4xl font-semibold tracking-tight sm:text-5xl">
+                  <div className="font-mono text-2xl font-semibold tracking-tight sm:text-3xl">
                     {formatPriceDisplay(selected.priceUsd)}
                   </div>
                   <div
-                    className={`mt-1 font-mono text-lg ${
+                    className={`mt-1 font-mono text-sm ${
                       (selected.change24h ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
                     }`}
                   >
-                    {formatPercent(selected.change24h)}
+                    {formatPercent(selected.change24h)} 24h
                   </div>
                 </div>
               </div>
@@ -524,38 +553,77 @@ export default function TokenChartPage() {
 
             <section className="overflow-x-auto">
               <div
-                className="grid min-w-[720px] gap-px border border-white/10 bg-white/10"
-                style={{ gridTemplateColumns: `repeat(${metricItems.length || 1}, minmax(0, 1fr))` }}
+                className="min-w-[680px] border border-white/10"
               >
-                {metricItems.map((item) => (
-                  <div key={item.label} className="bg-black px-3 py-3">
-                    <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">{item.label}</div>
-                    <div className="mt-1 font-mono text-sm text-white/90 sm:text-base">{item.value}</div>
-                  </div>
-                ))}
+                <div
+                  className="grid border-b border-white/10 bg-black text-[10px] uppercase tracking-[0.18em] text-white/40"
+                  style={{ gridTemplateColumns: `repeat(${metricItems.length || 1}, minmax(0, 1fr))` }}
+                >
+                  {metricItems.map((item) => (
+                    <div key={`${item.label}-header`} className="border-r border-white/10 px-3 py-2 last:border-r-0">
+                      {item.label}
+                    </div>
+                  ))}
+                </div>
+                <div
+                  className="grid bg-black"
+                  style={{ gridTemplateColumns: `repeat(${metricItems.length || 1}, minmax(0, 1fr))` }}
+                >
+                  {metricItems.map((item) => (
+                    <div key={item.label} className="border-r border-white/10 px-3 py-2.5 font-mono text-sm text-white/90 last:border-r-0 sm:text-base">
+                      {item.value}
+                    </div>
+                  ))}
+                </div>
               </div>
             </section>
 
-            <section className="flex flex-wrap gap-2">
-              {(Object.keys(RANGE_CONFIG) as Range[]).map((item) => (
+            <section className="flex flex-wrap items-center justify-between gap-2 border border-white/10 bg-black px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {(Object.keys(RANGE_CONFIG) as Range[]).map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => setRange(item)}
+                    className={`px-2 py-1 font-mono text-xs uppercase tracking-[0.14em] transition-colors ${
+                      range === item
+                        ? 'text-emerald-400'
+                        : 'text-white/50 hover:text-white'
+                    }`}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1 text-xs">
                 <button
-                  key={item}
                   type="button"
-                  onClick={() => setRange(item)}
-                  className={`border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.16em] transition-colors ${
-                    range === item
+                  onClick={() => setViewMode('price')}
+                  className={`border px-2.5 py-1 font-mono uppercase tracking-[0.14em] ${
+                    viewMode === 'price'
                       ? 'border-emerald-400 text-emerald-400'
                       : 'border-white/10 text-white/50 hover:border-white/35 hover:text-white'
                   }`}
                 >
-                  {item}
+                  Price
                 </button>
-              ))}
+                <button
+                  type="button"
+                  onClick={() => setViewMode('mcap')}
+                  className={`border px-2.5 py-1 font-mono uppercase tracking-[0.14em] ${
+                    viewMode === 'mcap'
+                      ? 'border-emerald-400 text-emerald-400'
+                      : 'border-white/10 text-white/50 hover:border-white/35 hover:text-white'
+                  }`}
+                >
+                  Mcap
+                </button>
+              </div>
             </section>
 
             <section className="border border-white/10 bg-black">
-              <div className="relative min-h-[240px] w-full md:min-h-[320px]">
-                <div ref={chartContainerRef} className="h-[240px] w-full md:h-[320px]" />
+              <div className="relative min-h-[320px] w-full md:min-h-[460px]">
+                <div ref={chartContainerRef} className="h-[320px] w-full md:h-[460px]" />
                 {chartLoading && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/75 font-mono text-sm text-white/45">
                     Loading candles…
@@ -565,7 +633,7 @@ export default function TokenChartPage() {
                   <div className="absolute inset-0 flex items-center justify-center px-4 text-center font-mono text-sm text-white/35">
                     No candle data available for this token.
                   </div>
-                )}
+                ))}
               </div>
 
               <div className="flex flex-col gap-2 border-t border-white/10 px-3 py-3 text-[11px] uppercase tracking-[0.16em] text-white/45 sm:flex-row sm:items-center sm:justify-between">
@@ -575,7 +643,9 @@ export default function TokenChartPage() {
                   <span>L {lastCandle ? formatPrice(lastCandle.low) : '—'}</span>
                   <span>C {lastCandle ? formatPrice(lastCandle.close) : '—'}</span>
                 </div>
-                <div className="font-mono text-white/45">SOURCE {chartSource}</div>
+                <div className="font-mono text-white/45">
+                  last update {lastUpdateLabel} · source {chartSource}
+                </div>
               </div>
             </section>
           </>
