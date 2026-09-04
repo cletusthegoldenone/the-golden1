@@ -80,7 +80,16 @@ async function callGeminiAPI(message: string, history: ConversationTurn[] = []):
 }
 
 function getApiBaseUrl(): string {
-  return process.env.API_BASE_URL?.trim().replace(/\/+$/, '') ?? '';
+  const raw = process.env.API_BASE_URL?.trim();
+  if (!raw) return '';
+
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    return raw.replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
 }
 
 async function callUpstreamChat(
@@ -91,20 +100,39 @@ async function callUpstreamChat(
   if (!apiBaseUrl) return null;
 
   try {
-    const upstream = await fetch(`${apiBaseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, history }),
-      signal: AbortSignal.timeout(15_000),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15_000);
+    let upstream: Response;
+    try {
+      upstream = await fetch(`${apiBaseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, history }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
     if (!upstream.ok) return null;
 
-    const data = await upstream.json();
-    if (typeof data?.answer !== 'string' || !data.answer.trim()) return null;
-    return {
-      answer: data.answer,
-      usedLiveAI: !!data.usedLiveAI,
-    };
+    const raw = await upstream.text();
+    if (!raw.trim()) return null;
+
+    const contentType = upstream.headers.get('content-type') ?? '';
+    if (contentType.toLowerCase().includes('application/json')) {
+      try {
+        const data = JSON.parse(raw);
+        if (typeof data?.answer !== 'string' || !data.answer.trim()) return null;
+        return {
+          answer: data.answer,
+          usedLiveAI: typeof data?.usedLiveAI === 'boolean' ? data.usedLiveAI : false,
+        };
+      } catch {
+        return null;
+      }
+    }
+
+    return { answer: raw, usedLiveAI: true };
   } catch {
     return null;
   }
@@ -165,15 +193,15 @@ export async function POST(request: NextRequest) {
     let answer: string;
     let usedLiveAI = false;
 
-    try {
-      answer = await callGeminiAPI(message, history);
-      usedLiveAI = true;
-    } catch {
-      const upstream = await callUpstreamChat(message, rawHistory);
-      if (upstream) {
-        answer = upstream.answer;
-        usedLiveAI = upstream.usedLiveAI;
-      } else {
+    const upstream = await callUpstreamChat(message, rawHistory);
+    if (upstream) {
+      answer = upstream.answer;
+      usedLiveAI = upstream.usedLiveAI;
+    } else {
+      try {
+        answer = await callGeminiAPI(message, history);
+        usedLiveAI = true;
+      } catch {
         answer = mockResponse(message);
       }
     }
