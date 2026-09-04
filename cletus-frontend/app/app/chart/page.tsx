@@ -166,7 +166,7 @@ function derivePriceFormat(candles: Candle[]): { precision: number; minMove: num
     }
   }
 
-  const precisionFromStep = Number.isFinite(minStep) ? Math.ceil(-Math.log10(minStep)) : 0;
+  const precisionFromStep = Number.isFinite(minStep) ? Math.ceil(-Math.log10(minStep)) + 1 : 0;
   const precisionFromPrice = Math.ceil(-Math.log10(minAbsPrice)) + 2;
   const precision = Math.min(16, Math.max(2, Math.max(precisionFromStep, precisionFromPrice)));
   return { precision, minMove: Number(`1e-${precision}`) };
