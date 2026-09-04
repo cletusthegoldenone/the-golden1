@@ -32,6 +32,8 @@ type Candle = {
   volume?: number;
 };
 
+type CandleLike = Partial<Candle> & { time?: number | string };
+
 type Range = '1m' | '5m' | '15m' | '1H' | '4H' | '1D' | '1W';
 
 const RANGE_CONFIG: Record<Range, { timeframe: string; count: string }> = {
@@ -132,6 +134,69 @@ function parseTimestamp(value: unknown): number | null {
   return null;
 }
 
+function normalizeCandles(input: unknown): Candle[] {
+  if (!Array.isArray(input)) return [];
+
+  const mapped: Candle[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as CandleLike;
+    const rawTimeCandidate = typeof raw.time === 'string' ? Number(raw.time) : raw.time;
+    const rawTime = typeof rawTimeCandidate === 'number' ? rawTimeCandidate : NaN;
+    const open = typeof raw.open === 'number' ? raw.open : Number(raw.open);
+    const high = typeof raw.high === 'number' ? raw.high : Number(raw.high);
+    const low = typeof raw.low === 'number' ? raw.low : Number(raw.low);
+    const close = typeof raw.close === 'number' ? raw.close : Number(raw.close);
+    const volume =
+      typeof raw.volume === 'number'
+        ? raw.volume
+        : raw.volume == null
+          ? undefined
+          : Number(raw.volume);
+
+    if (
+      !Number.isFinite(rawTime) ||
+      !Number.isFinite(open) ||
+      !Number.isFinite(high) ||
+      !Number.isFinite(low) ||
+      !Number.isFinite(close)
+    ) {
+      continue;
+    }
+
+    const time = Math.floor(rawTime >= 1e12 ? rawTime / 1000 : rawTime);
+    if (!Number.isFinite(time) || time <= 0) continue;
+
+    const candle: Candle = {
+      time,
+      open,
+      high: Math.max(open, high, low, close),
+      low: Math.min(open, high, low, close),
+      close,
+    };
+
+    if (Number.isFinite(volume)) {
+      candle.volume = volume;
+    }
+
+    mapped.push(candle);
+  }
+
+  mapped.sort((a, b) => a.time - b.time);
+
+  const deduped: Candle[] = [];
+  for (const candle of mapped) {
+    const prev = deduped[deduped.length - 1];
+    if (prev && prev.time === candle.time) {
+      deduped[deduped.length - 1] = candle;
+    } else {
+      deduped.push(candle);
+    }
+  }
+  return deduped;
+  return deduped;
+}
+
 export default function TokenChartPage() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<TokenResult[]>([]);
@@ -219,7 +284,7 @@ export default function TokenChartPage() {
       }
 
       const data = await res.json();
-      const nextCandles = Array.isArray(data.candles) ? data.candles : [];
+      const nextCandles = normalizeCandles(data.candles);
       setCandles(nextCandles);
       setLastFetchedAt(parseTimestamp(data.lastUpdated));
       setChartSource(typeof data.source === 'string' ? data.source : 'DexScreener / Helius');
