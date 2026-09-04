@@ -107,6 +107,8 @@ export default function CletusAIPage() {
   const messagesRef = useRef(messages);
   const liveStatusRef = useRef(liveStatus);
   const voiceRequestInFlightRef = useRef(false);
+  const recognitionActiveRef = useRef(false);
+  const suppressRecognitionRestartRef = useRef(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const liveOnRef = useRef(false);
@@ -116,6 +118,24 @@ export default function CletusAIPage() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  const restartRecognitionIfNeeded = useCallback(() => {
+    if (
+      !recognitionRef.current ||
+      !liveOnRef.current ||
+      voiceRequestInFlightRef.current ||
+      liveStatusRef.current === 'speaking' ||
+      recognitionActiveRef.current
+    ) {
+      return;
+    }
+
+    try {
+      recognitionRef.current.start();
+    } catch {
+      // ignore restart race
+    }
+  }, []);
 
   const appendMessage = useCallback((message: ChatMessage) => {
     const next = [...messagesRef.current, message];
@@ -197,8 +217,8 @@ export default function CletusAIPage() {
       });
       const data = await res.json();
       appendMessage({
-      role: 'assistant',
-      content: data.answer ?? data.message ?? 'Something went wrong. Try again.',
+        role: 'assistant',
+        content: data.answer ?? data.message ?? 'Something went wrong. Try again.',
       });
     } catch {
       appendMessage({ role: 'assistant', content: 'Connection error. Please try again.' });
@@ -208,7 +228,7 @@ export default function CletusAIPage() {
   };
 
   const speak = (text: string) => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    if (typeof window === 'undefined' || !window.speechSynthesis) return false;
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.rate = 1;
@@ -216,25 +236,22 @@ export default function CletusAIPage() {
     u.onend = () => {
       if (liveOnRef.current) {
         setLiveStatus('listening');
-        if (recognitionRef.current && !voiceRequestInFlightRef.current) {
-          try {
-            recognitionRef.current.start();
-          } catch {
-            // ignore restart race
-          }
-        }
+        restartRecognitionIfNeeded();
       } else {
         setLiveStatus('idle');
       }
     };
     window.speechSynthesis.speak(u);
+    return true;
   };
 
   const stopLive = useCallback(() => {
     setLiveOn(false);
+    liveOnRef.current = false;
     setLiveStatus('idle');
     setLiveTranscript('');
     voiceRequestInFlightRef.current = false;
+    suppressRecognitionRestartRef.current = true;
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -261,6 +278,7 @@ export default function CletusAIPage() {
     }
 
     setLiveOn(true);
+    liveOnRef.current = true;
     setLiveStatus('listening');
     setLiveTranscript('Listening… speak to Cletus');
 
@@ -268,6 +286,9 @@ export default function CletusAIPage() {
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
+    recognition.onstart = () => {
+      recognitionActiveRef.current = true;
+    };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     recognition.onresult = async (event: any) => {
@@ -282,6 +303,7 @@ export default function CletusAIPage() {
       setLiveTranscript(finalText.trim());
       setLiveStatus('speaking');
       voiceRequestInFlightRef.current = true;
+      suppressRecognitionRestartRef.current = true;
       try {
         recognition.stop();
       } catch {
@@ -301,46 +323,47 @@ export default function CletusAIPage() {
         const answer =
           data.answer ?? data.message ?? "I didn't catch that. Try again.";
         appendMessage({ role: 'assistant', content: answer });
-        speak(answer);
-      } catch {
-        const fail = 'Connection error on voice. Try text chat.';
-        appendMessage({ role: 'assistant', content: fail });
-        speak(fail);
-      } finally {
-        voiceRequestInFlightRef.current = false;
-        if (
-          recognitionRef.current &&
-          liveOnRef.current &&
-          liveStatusRef.current !== 'speaking'
-        ) {
-          try {
-            recognition.start();
-          } catch {
-            // ignore restart race
-          }
-        }
+      const didSpeak = speak(answer);
+      if (!didSpeak && liveOnRef.current) {
+        setLiveStatus('listening');
+        restartRecognitionIfNeeded();
       }
+    } catch {
+      const fail = 'Connection error on voice. Try text chat.';
+      appendMessage({ role: 'assistant', content: fail });
+      const didSpeak = speak(fail);
+      if (!didSpeak && liveOnRef.current) {
+        setLiveStatus('listening');
+        restartRecognitionIfNeeded();
+      }
+    } finally {
+      voiceRequestInFlightRef.current = false;
+    }
     };
 
     recognition.onerror = () => {
-      setLiveStatus('error');
-      setLiveTranscript('Mic error — check permissions or use text chat.');
+    setLiveStatus('error');
+    setLiveTranscript('Mic error — check permissions or use text chat.');
     voiceRequestInFlightRef.current = false;
+    liveOnRef.current = false;
+    setLiveOn(false);
+    suppressRecognitionRestartRef.current = true;
     };
 
     recognition.onend = () => {
+    recognitionActiveRef.current = false;
+    if (suppressRecognitionRestartRef.current) {
+      suppressRecognitionRestartRef.current = false;
+      return;
+    }
     if (
       recognitionRef.current &&
       liveOnRef.current &&
       !voiceRequestInFlightRef.current &&
       liveStatusRef.current !== 'speaking'
     ) {
-      try {
-        recognition.start();
-      } catch {
-          // ignore restart race
-        }
-      }
+      restartRecognitionIfNeeded();
+    }
     };
 
     recognitionRef.current = recognition;
@@ -349,7 +372,7 @@ export default function CletusAIPage() {
     } catch {
       setLiveStatus('error');
     }
-  }, [appendMessage, liveOn, queueUserMessage]);
+  }, [appendMessage, queueUserMessage, restartRecognitionIfNeeded]);
 
 
   useEffect(() => {
