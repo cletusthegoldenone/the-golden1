@@ -105,12 +105,14 @@ export default function CletusAIPage() {
   const [liveTranscript, setLiveTranscript] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef(messages);
+  const liveStatusRef = useRef(liveStatus);
   const voiceRequestInFlightRef = useRef(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const liveOnRef = useRef(false);
 
   useEffect(() => { liveOnRef.current = liveOn; }, [liveOn]);
+  useEffect(() => { liveStatusRef.current = liveStatus; }, [liveStatus]);
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
@@ -180,7 +182,7 @@ export default function CletusAIPage() {
 
   const sendChat = async () => {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || voiceRequestInFlightRef.current) return;
     setInput('');
     const { history } = queueUserMessage(text);
     setLoading(true);
@@ -211,7 +213,20 @@ export default function CletusAIPage() {
     const u = new SpeechSynthesisUtterance(text);
     u.rate = 1;
     u.onstart = () => setLiveStatus('speaking');
-    u.onend = () => setLiveStatus(liveOnRef.current ? 'listening' : 'idle');
+    u.onend = () => {
+      if (liveOnRef.current) {
+        setLiveStatus('listening');
+        if (recognitionRef.current && !voiceRequestInFlightRef.current) {
+          try {
+            recognitionRef.current.start();
+          } catch {
+            // ignore restart race
+          }
+        }
+      } else {
+        setLiveStatus('idle');
+      }
+    };
     window.speechSynthesis.speak(u);
   };
 
@@ -293,7 +308,11 @@ export default function CletusAIPage() {
         speak(fail);
       } finally {
         voiceRequestInFlightRef.current = false;
-        if (recognitionRef.current && liveOnRef.current) {
+        if (
+          recognitionRef.current &&
+          liveOnRef.current &&
+          liveStatusRef.current !== 'speaking'
+        ) {
           try {
             recognition.start();
           } catch {
@@ -310,7 +329,12 @@ export default function CletusAIPage() {
     };
 
     recognition.onend = () => {
-    if (recognitionRef.current && liveOnRef.current && !voiceRequestInFlightRef.current) {
+    if (
+      recognitionRef.current &&
+      liveOnRef.current &&
+      !voiceRequestInFlightRef.current &&
+      liveStatusRef.current !== 'speaking'
+    ) {
       try {
         recognition.start();
       } catch {
@@ -471,7 +495,7 @@ export default function CletusAIPage() {
                 <button
                   type="button"
                   onClick={sendChat}
-                  disabled={loading || !input.trim()}
+                  disabled={loading || voiceRequestInFlightRef.current || !input.trim()}
                   className="px-4 py-2.5 rounded-xl text-sm font-semibold bg-white text-black hover:bg-white/90 disabled:opacity-40 transition-all"
                 >
                   Send
