@@ -1,6 +1,7 @@
 'use strict';
 
 const { getSecComplianceContext } = require('./secCompliance');
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 
 const SYSTEM_PROMPT = `You are Cletus, an AI with master's-degree-level expertise spanning five disciplines. Your primary focus is finance, economics, and trading. You can answer questions on other topics, but you excel especially in:
 
@@ -46,6 +47,7 @@ ${getSecComplianceContext()}`;
 async function callGeminiAPI(message, history = []) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+  const model = process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
 
   const contents = [
     ...history,
@@ -58,7 +60,7 @@ async function callGeminiAPI(message, history = []) {
   let res;
   try {
     res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
