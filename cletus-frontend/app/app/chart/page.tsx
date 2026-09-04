@@ -33,6 +33,8 @@ type Candle = {
   volume?: number;
 };
 
+type CandleLike = Partial<Candle> & { time?: number | string };
+
 type Range = '1m' | '5m' | '15m' | '1H' | '4H' | '1D' | '1W';
 
 const RANGE_CONFIG: Record<Range, { timeframe: string; count: string }> = {
@@ -85,6 +87,66 @@ function truncateAddress(value?: string) {
   if (!value) return '—';
   if (value.length <= 12) return value;
   return `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+function normalizeCandles(input: unknown): Candle[] {
+  if (!Array.isArray(input)) return [];
+
+  const mapped = input
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const raw = item as CandleLike;
+      const rawTime = typeof raw.time === 'string' ? Number(raw.time) : raw.time;
+      const open = typeof raw.open === 'number' ? raw.open : Number(raw.open);
+      const high = typeof raw.high === 'number' ? raw.high : Number(raw.high);
+      const low = typeof raw.low === 'number' ? raw.low : Number(raw.low);
+      const close = typeof raw.close === 'number' ? raw.close : Number(raw.close);
+      const volume =
+        typeof raw.volume === 'number'
+          ? raw.volume
+          : raw.volume == null
+            ? undefined
+            : Number(raw.volume);
+
+      if (
+        !Number.isFinite(rawTime) ||
+        !Number.isFinite(open) ||
+        !Number.isFinite(high) ||
+        !Number.isFinite(low) ||
+        !Number.isFinite(close)
+      ) {
+        return null;
+      }
+
+      const time = Math.floor(rawTime > 1e12 ? rawTime / 1000 : rawTime);
+      if (!Number.isFinite(time) || time <= 0) return null;
+
+      const upper = Math.max(open, high, low, close);
+      const lower = Math.min(open, high, low, close);
+
+      return {
+        time,
+        open,
+        high: upper,
+        low: lower,
+        close,
+        volume: Number.isFinite(volume) ? volume : undefined,
+      } satisfies Candle;
+    })
+    .filter((item): item is Candle => Boolean(item))
+    .sort((a, b) => a.time - b.time);
+
+  const deduped: Candle[] = [];
+  for (const candle of mapped) {
+    const prev = deduped[deduped.length - 1];
+    if (prev && prev.time === candle.time) {
+      deduped[deduped.length - 1] = candle;
+    } else {
+      deduped.push(candle);
+    }
+  }
+
+  return deduped;
 }
 
 export default function TokenChartPage() {
@@ -201,7 +263,7 @@ export default function TokenChartPage() {
       }
 
       const data = await res.json();
-      const nextCandles = Array.isArray(data.candles) ? data.candles : [];
+      const nextCandles = normalizeCandles(data.candles);
       setCandles(nextCandles);
       setChartSource(typeof data.source === 'string' ? data.source : 'DexScreener / Helius');
       setSelected((prev) =>
