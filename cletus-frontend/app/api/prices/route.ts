@@ -129,7 +129,13 @@ function generateCandleSeries(
 
 // ── Simple in-memory price cache (15 s TTL) ───────────────────────────────────
 
-const priceCache = new Map<string, { price: number; change24h: number; at: number }>();
+const priceCache = new Map<string, {
+  price: number;
+  change24h: number;
+  volume24h: number;
+  quoteSymbol: string;
+  at: number;
+}>();
 const CACHE_TTL_MS = 15_000;
 
 // ── Route ─────────────────────────────────────────────────────────────────────
@@ -151,12 +157,17 @@ export async function GET(request: Request) {
   const cacheKey = mint || pair;
 
   // Try to get a real current price
-  let realPrice: { price: number; change24h: number } | null = null;
+  let realPrice: { price: number; change24h: number; volume24h: number; quoteSymbol: string } | null = null;
 
   if (mint) {
     const cached = priceCache.get(cacheKey);
     if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
-      realPrice = { price: cached.price, change24h: cached.change24h };
+      realPrice = {
+        price: cached.price,
+        change24h: cached.change24h,
+        volume24h: cached.volume24h,
+        quoteSymbol: cached.quoteSymbol,
+      };
     } else {
       realPrice = await fetchRealPrice(mint);
       if (realPrice) {
