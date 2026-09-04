@@ -80,25 +80,18 @@ const AGGRESSION_PRESETS: Record<
   },
 };
 
-const EMPTY: TradeSession = {
-  running: false,
-  paused: false,
-  mode: 'paper',
-  capital: 0,
-  available: 0,
-  dailyRealizedPnl: 0,
-  dailyProfitTarget: 500,
-  dailyMaxLoss: 50,
-  openPositions: [],
-  aggression: '—',
-  positionSizePercent: 0,
-  stopLossPercent: 0,
-  takeProfitPercent: 0,
-  maxPositions: 9,
-  withinHours: true,
-};
-
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
+const DEFAULT_CAPITAL = 1000;
+const DEFAULT_START_TIME = '9:00 AM';
+const DEFAULT_END_TIME = '9:00 PM';
+const DEFAULT_AGGRESSION: Aggression = 'conservative';
+const DEFAULT_POSITION_SIZE = 10;
+const DEFAULT_STOP_LOSS = 5;
+const DEFAULT_TAKE_PROFIT = 10;
+const DEFAULT_DAILY_PROFIT_TARGET = 500;
+const DEFAULT_DAILY_MAX_LOSS = 50;
+const DEFAULT_MAX_POSITIONS = 20;
+const SAVE_FEEDBACK_MS = 2000;
 const CAPITAL_PRESETS = [500, 1000, 5000, 10000];
 const TIME_OPTIONS = Array.from({ length: 24 * 2 }, (_, i) => {
   const h = Math.floor(i / 2);
@@ -107,6 +100,24 @@ const TIME_OPTIONS = Array.from({ length: 24 * 2 }, (_, i) => {
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${m} ${ampm}`;
 });
+
+const EMPTY: TradeSession = {
+  running: false,
+  paused: false,
+  mode: 'paper',
+  capital: 0,
+  available: 0,
+  dailyRealizedPnl: 0,
+  dailyProfitTarget: DEFAULT_DAILY_PROFIT_TARGET,
+  dailyMaxLoss: DEFAULT_DAILY_MAX_LOSS,
+  openPositions: [],
+  aggression: '—',
+  positionSizePercent: 0,
+  stopLossPercent: 0,
+  takeProfitPercent: 0,
+  maxPositions: DEFAULT_MAX_POSITIONS,
+  withinHours: true,
+};
 
 function formatUsd(n: number, showSign = false) {
   const abs = Math.abs(n);
@@ -126,26 +137,52 @@ function formatPrice(p: number) {
   return p.toFixed(2);
 }
 
+function readNumber(value: unknown, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export default function ActiveTradingPage() {
   const [session, setSession] = useState<TradeSession>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const hydratedConfig = useRef(false);
+  const savedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [capital, setCapital] = useState(1000);
+  const [capital, setCapital] = useState(DEFAULT_CAPITAL);
+  const [capitalInput, setCapitalInput] = useState(String(DEFAULT_CAPITAL));
   const [activeDays, setActiveDays] = useState<Set<string>>(
     () => new Set(['Mon', 'Tue', 'Wed', 'Thu', 'Fri'])
   );
-  const [startTime, setStartTime] = useState('9:00 AM');
-  const [endTime, setEndTime] = useState('9:00 PM');
-  const [aggression, setAggression] = useState<Aggression>('conservative');
-  const [positionSize, setPositionSize] = useState(10);
-  const [stopLoss, setStopLoss] = useState(5);
-  const [takeProfit, setTakeProfit] = useState(10);
-  const [dailyProfitTarget, setDailyProfitTarget] = useState(500);
-  const [dailyMaxLoss, setDailyMaxLoss] = useState(50);
-  const [maxPositions, setMaxPositions] = useState(20);
+  const [startTime, setStartTime] = useState(DEFAULT_START_TIME);
+  const [endTime, setEndTime] = useState(DEFAULT_END_TIME);
+  const [aggression, setAggression] = useState<Aggression>(DEFAULT_AGGRESSION);
+  const [positionSize, setPositionSize] = useState(DEFAULT_POSITION_SIZE);
+  const [stopLoss, setStopLoss] = useState(DEFAULT_STOP_LOSS);
+  const [takeProfit, setTakeProfit] = useState(DEFAULT_TAKE_PROFIT);
+  const [dailyProfitTarget, setDailyProfitTarget] = useState(DEFAULT_DAILY_PROFIT_TARGET);
+  const [dailyProfitTargetInput, setDailyProfitTargetInput] = useState(
+    String(DEFAULT_DAILY_PROFIT_TARGET)
+  );
+  const [dailyMaxLoss, setDailyMaxLoss] = useState(DEFAULT_DAILY_MAX_LOSS);
+  const [dailyMaxLossInput, setDailyMaxLossInput] = useState(String(DEFAULT_DAILY_MAX_LOSS));
+  const [maxPositions, setMaxPositions] = useState(DEFAULT_MAX_POSITIONS);
+
+  const syncCapital = useCallback((value: number) => {
+    setCapital(value);
+    setCapitalInput(String(value));
+  }, []);
+
+  const syncDailyProfitTarget = useCallback((value: number) => {
+    setDailyProfitTarget(value);
+    setDailyProfitTargetInput(String(value));
+  }, []);
+
+  const syncDailyMaxLoss = useCallback((value: number) => {
+    setDailyMaxLoss(value);
+    setDailyMaxLossInput(String(value));
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -154,48 +191,70 @@ export default function ActiveTradingPage() {
       });
       if (res.ok) {
         const data = await res.json();
+        const nextCapital = Math.max(1, readNumber(data.capital, DEFAULT_CAPITAL));
+        const nextDailyRealizedPnl = readNumber(data.dailyRealizedPnl, 0);
+        const nextDailyProfitTarget = Math.max(0, readNumber(data.dailyProfitTarget, DEFAULT_DAILY_PROFIT_TARGET));
+        const nextDailyMaxLoss = Math.max(0, readNumber(data.dailyMaxLoss, DEFAULT_DAILY_MAX_LOSS));
+        const nextPositionSize = Math.max(1, readNumber(data.positionSizePercent, DEFAULT_POSITION_SIZE));
+        const nextStopLoss = Math.max(1, readNumber(data.stopLossPercent, DEFAULT_STOP_LOSS));
+        const nextTakeProfit = Math.max(1, readNumber(data.takeProfitPercent, DEFAULT_TAKE_PROFIT));
+        const nextMaxPositions = Math.max(1, readNumber(data.maxPositions, DEFAULT_MAX_POSITIONS));
+
         setSession({
           running: !!data.running,
           paused: !!data.paused,
           pauseReason: data.pauseReason,
           mode: data.mode === 'live' ? 'live' : 'paper',
-          capital: Number(data.capital) || 0,
-          available: Number(data.available) || 0,
-          dailyRealizedPnl: Number(data.dailyRealizedPnl) || 0,
-          dailyProfitTarget: Number(data.dailyProfitTarget) ?? 500,
-          dailyMaxLoss: Number(data.dailyMaxLoss) ?? 50,
+          capital: nextCapital,
+          available: readNumber(data.available, 0),
+          dailyRealizedPnl: nextDailyRealizedPnl,
+          dailyProfitTarget: nextDailyProfitTarget,
+          dailyMaxLoss: nextDailyMaxLoss,
           openPositions: Array.isArray(data.openPositions) ? data.openPositions : [],
           aggression: data.aggression ?? '—',
-          positionSizePercent: Number(data.positionSizePercent) || 0,
-          stopLossPercent: Number(data.stopLossPercent) || 0,
-          takeProfitPercent: Number(data.takeProfitPercent) || 0,
-          maxPositions: Number(data.maxPositions) || 9,
+          positionSizePercent: nextPositionSize,
+          stopLossPercent: nextStopLoss,
+          takeProfitPercent: nextTakeProfit,
+          maxPositions: nextMaxPositions,
           withinHours: data.withinHours !== false,
         });
 
         if (!hydratedConfig.current) {
-          if ((Number(data.capital) || 0) > 0) setCapital(Number(data.capital));
-          if ((Number(data.dailyProfitTarget) || 0) >= 0) {
-            setDailyProfitTarget(Number(data.dailyProfitTarget) || 0);
+          syncCapital(nextCapital);
+          syncDailyProfitTarget(nextDailyProfitTarget);
+          syncDailyMaxLoss(nextDailyMaxLoss);
+          setMaxPositions(nextMaxPositions);
+          setPositionSize(nextPositionSize);
+          setStopLoss(nextStopLoss);
+          setTakeProfit(nextTakeProfit);
+
+          if (Array.isArray(data.activeDays)) {
+            const nextActiveDays = data.activeDays.filter((day: unknown): day is string =>
+              DAYS.includes(day as (typeof DAYS)[number])
+            );
+            setActiveDays(
+              new Set(nextActiveDays.length > 0 ? nextActiveDays : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'])
+            );
+          } else {
+            setActiveDays(new Set(['Mon', 'Tue', 'Wed', 'Thu', 'Fri']));
           }
-          if ((Number(data.dailyMaxLoss) || 0) >= 0) {
-            setDailyMaxLoss(Number(data.dailyMaxLoss) || 0);
+          if (typeof data.startTime === 'string' && TIME_OPTIONS.includes(data.startTime)) {
+            setStartTime(data.startTime);
+          } else {
+            setStartTime(DEFAULT_START_TIME);
           }
-          if ((Number(data.maxPositions) || 0) > 0) setMaxPositions(Number(data.maxPositions));
-          if ((Number(data.positionSizePercent) || 0) > 0) {
-            setPositionSize(Number(data.positionSizePercent));
-          }
-          if ((Number(data.stopLossPercent) || 0) > 0) {
-            setStopLoss(Number(data.stopLossPercent));
-          }
-          if ((Number(data.takeProfitPercent) || 0) > 0) {
-            setTakeProfit(Number(data.takeProfitPercent));
+          if (typeof data.endTime === 'string' && TIME_OPTIONS.includes(data.endTime)) {
+            setEndTime(data.endTime);
+          } else {
+            setEndTime(DEFAULT_END_TIME);
           }
 
           const nextAggression =
             typeof data.aggression === 'string' ? data.aggression.toLowerCase() : '';
           if (nextAggression in AGGRESSION_PRESETS) {
             setAggression(nextAggression as Aggression);
+          } else {
+            setAggression(DEFAULT_AGGRESSION);
           }
           hydratedConfig.current = true;
         }
@@ -215,6 +274,7 @@ export default function ActiveTradingPage() {
 
   const toggleDay = (day: string) => {
     setActiveDays((prev) => {
+      if (prev.size === 1 && prev.has(day)) return prev;
       const next = new Set(prev);
       if (next.has(day)) next.delete(day);
       else next.add(day);
@@ -230,36 +290,32 @@ export default function ActiveTradingPage() {
     setTakeProfit(preset.tp);
   };
 
-  const persistConfig = useCallback(async () => {
-    setBusy(true);
-    try {
-      await fetch('/api/protected/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          capital,
-          activeDays: Array.from(activeDays),
-          startTime,
-          endTime,
-          aggression,
-          positionSizePercent: positionSize,
-          stopLossPercent: stopLoss,
-          takeProfitPercent: takeProfit,
-          dailyProfitTarget,
-          dailyMaxLoss,
-          maxPositions,
-        }),
-      });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      await load();
-      return true;
-    } catch {
-      return false;
-    } finally {
-      setBusy(false);
-    }
+  const persistConfigCore = useCallback(async () => {
+    const res = await fetch('/api/protected/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        capital,
+        activeDays: Array.from(activeDays),
+        startTime,
+        endTime,
+        aggression,
+        positionSizePercent: positionSize,
+        stopLossPercent: stopLoss,
+        takeProfitPercent: takeProfit,
+        dailyProfitTarget,
+        dailyMaxLoss,
+        maxPositions,
+      }),
+    });
+    if (!res.ok) return false;
+    hydratedConfig.current = false;
+    setSaved(true);
+    if (savedResetTimer.current) clearTimeout(savedResetTimer.current);
+    savedResetTimer.current = setTimeout(() => setSaved(false), SAVE_FEEDBACK_MS);
+    await load();
+    return true;
   }, [
     activeDays,
     aggression,
@@ -272,12 +328,25 @@ export default function ActiveTradingPage() {
     startTime,
     stopLoss,
     takeProfit,
+    load,
   ]);
+
+  const persistConfig = useCallback(async () => {
+    setBusy(true);
+    try {
+      return await persistConfigCore();
+    } catch {
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [persistConfigCore]);
 
   const post = async (path: string) => {
     setBusy(true);
     try {
-      await fetch(path, { method: 'POST', credentials: 'include' });
+      const res = await fetch(path, { method: 'POST', credentials: 'include' });
+      if (!res.ok) return;
       await load();
     } finally {
       setBusy(false);
@@ -285,23 +354,37 @@ export default function ActiveTradingPage() {
   };
 
   const startTrading = async () => {
-    const savedConfig = await persistConfig();
-    if (!savedConfig) return;
-    await post('/api/protected/trade/start');
-  };
-
-  const resetSimulation = async () => {
     setBusy(true);
     try {
-      await fetch('/api/protected/simulate/reset', {
-        method: 'POST',
-        credentials: 'include',
-      });
+      const savedConfig = await persistConfigCore();
+      if (!savedConfig) return;
+      const startPath = session.mode === 'paper' ? '/api/protected/simulate/start' : '/api/protected/trade/start';
+      const res = await fetch(startPath, { method: 'POST', credentials: 'include' });
+      if (!res.ok) return;
       await load();
     } finally {
       setBusy(false);
     }
   };
+
+  const resetSimulation = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch('/api/protected/simulate/reset', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!res.ok) return;
+      hydratedConfig.current = false;
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => () => {
+    if (savedResetTimer.current) clearTimeout(savedResetTimer.current);
+  }, []);
 
   const unrealizedPnl = useMemo(
     () => session.openPositions.reduce((sum, p) => sum + (p.pnlUsd || 0), 0),
@@ -478,11 +561,11 @@ export default function ActiveTradingPage() {
               <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap">
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={busy || session.mode !== 'paper'}
                   onClick={resetSimulation}
-                  className="px-5 py-3 rounded-2xl text-sm font-semibold border border-white/10 bg-black/20 text-white/70 hover:bg-white/5 transition-colors disabled:opacity-60"
+                  className="px-5 py-3 rounded-2xl text-sm font-semibold border border-white/10 bg-black/20 text-white/70 hover:bg-white/5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  ↺ Reset
+                  ↺ Reset Paper Session
                 </button>
                 <button
                   type="button"
@@ -494,7 +577,7 @@ export default function ActiveTradingPage() {
                 </button>
               </div>
             </div>
-            {session.running && (
+            {session.running && !session.paused && session.mode === 'paper' && (
               <p className="text-xs text-emerald-400 font-mono">
                 Simulation active · paper trades only
               </p>
@@ -514,10 +597,19 @@ export default function ActiveTradingPage() {
             <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2.5">
               <span className="text-white/40">$</span>
               <input
+                id="starting-capital"
+                aria-label="Starting capital"
                 type="number"
                 min={1}
-                value={capital}
-                onChange={(e) => setCapital(Math.max(1, Number(e.target.value) || 0))}
+                value={capitalInput}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setCapitalInput(value);
+                  if (value === '') return;
+                  const parsed = Number(value);
+                  if (Number.isFinite(parsed)) setCapital(Math.max(1, parsed));
+                }}
+                onBlur={() => setCapitalInput(String(capital))}
                 className="flex-1 bg-transparent text-white font-mono text-sm focus:outline-none"
               />
               <span className="text-xs text-white/40">USD</span>
@@ -527,7 +619,7 @@ export default function ActiveTradingPage() {
                 <button
                   key={value}
                   type="button"
-                  onClick={() => setCapital(value)}
+                  onClick={() => { syncCapital(value); }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-mono border transition-colors ${
                     capital === value
                       ? 'border-emerald-500/50 text-emerald-400 bg-emerald-500/15'
@@ -572,10 +664,13 @@ export default function ActiveTradingPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs text-white/45 block mb-1.5">Start Time</label>
+                <label htmlFor="trade-start-time" className="text-xs text-white/45 block mb-1.5">
+                  Start Time
+                </label>
                 <select
+                  id="trade-start-time"
                   value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
+                  onChange={(e) => { setStartTime(e.target.value); }}
                   className="w-full rounded-xl border border-white/10 bg-black px-3 py-2.5 text-sm text-white focus:outline-none"
                 >
                   {TIME_OPTIONS.map((time) => (
@@ -586,10 +681,13 @@ export default function ActiveTradingPage() {
                 </select>
               </div>
               <div>
-                <label className="text-xs text-white/45 block mb-1.5">End Time</label>
+                <label htmlFor="trade-end-time" className="text-xs text-white/45 block mb-1.5">
+                  End Time
+                </label>
                 <select
+                  id="trade-end-time"
                   value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
+                  onChange={(e) => { setEndTime(e.target.value); }}
                   className="w-full rounded-xl border border-white/10 bg-black px-3 py-2.5 text-sm text-white focus:outline-none"
                 >
                   {TIME_OPTIONS.map((time) => (
@@ -600,7 +698,7 @@ export default function ActiveTradingPage() {
                 </select>
               </div>
             </div>
-            <p className="text-[11px] text-white/30">Times are in your local timezone.</p>
+            <p className="text-[11px] text-white/30">Use your current device/browser timezone when choosing these labels. The exact AM/PM labels shown here are what get saved.</p>
           </section>
 
           <section className="rounded-2xl border border-white/10 bg-[#121212] p-5 space-y-4">
@@ -675,7 +773,7 @@ export default function ActiveTradingPage() {
                     min={row.min}
                     max={row.max}
                     value={row.value}
-                    onChange={(e) => row.set(Number(e.target.value))}
+                    onChange={(e) => { row.set(Number(e.target.value)); }}
                     className="w-full accent-emerald-500"
                   />
                 </div>
@@ -695,36 +793,62 @@ export default function ActiveTradingPage() {
             </p>
             <div>
               <div className="flex justify-between text-xs mb-1.5">
-                <span className="text-white/60">Daily Profit Target</span>
+                <label htmlFor="daily-profit-target" className="text-white/60">
+                  Daily Profit Target
+                </label>
                 <span className="font-mono text-emerald-400">
-                  ${dailyProfitTarget.toLocaleString()}
+                  {dailyProfitTarget > 0 ? `$${dailyProfitTarget.toLocaleString()}` : 'Disabled'}
                 </span>
               </div>
               <input
+                id="daily-profit-target"
+                aria-label="Daily profit target"
+                aria-describedby="daily-profit-target-help"
                 type="number"
                 min={0}
-                value={dailyProfitTarget}
-                onChange={(e) => setDailyProfitTarget(Math.max(0, Number(e.target.value) || 0))}
+                value={dailyProfitTargetInput}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setDailyProfitTargetInput(value);
+                  if (value === '') return;
+                  const parsed = Number(value);
+                  if (Number.isFinite(parsed)) setDailyProfitTarget(Math.max(0, parsed));
+                }}
+                onBlur={() => setDailyProfitTargetInput(String(dailyProfitTarget))}
                 className="w-full rounded-xl border border-white/10 bg-black px-3 py-2.5 text-sm font-mono text-white focus:outline-none"
               />
-              <p className="text-[11px] text-white/30 mt-1">
-                Stop trading when daily profit reaches this amount.
+              <p id="daily-profit-target-help" className="text-[11px] text-white/30 mt-1">
+                Stop trading when daily profit reaches this amount. Enter 0 to disable.
               </p>
             </div>
             <div>
               <div className="flex justify-between text-xs mb-1.5">
-                <span className="text-white/60">Daily Max Loss</span>
-                <span className="font-mono text-red-400">-${dailyMaxLoss.toLocaleString()}</span>
+                <label htmlFor="daily-max-loss" className="text-white/60">
+                  Daily Max Loss
+                </label>
+                <span className="font-mono text-red-400">
+                  {dailyMaxLoss > 0 ? `-$${dailyMaxLoss.toLocaleString()}` : 'Disabled'}
+                </span>
               </div>
               <input
+                id="daily-max-loss"
+                aria-label="Daily max loss"
+                aria-describedby="daily-max-loss-help"
                 type="number"
                 min={0}
-                value={dailyMaxLoss}
-                onChange={(e) => setDailyMaxLoss(Math.max(0, Number(e.target.value) || 0))}
+                value={dailyMaxLossInput}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setDailyMaxLossInput(value);
+                  if (value === '') return;
+                  const parsed = Number(value);
+                  if (Number.isFinite(parsed)) setDailyMaxLoss(Math.max(0, parsed));
+                }}
+                onBlur={() => setDailyMaxLossInput(String(dailyMaxLoss))}
                 className="w-full rounded-xl border border-white/10 bg-black px-3 py-2.5 text-sm font-mono text-white focus:outline-none"
               />
-              <p className="text-[11px] text-white/30 mt-1">
-                Stop trading when daily loss reaches this amount.
+              <p id="daily-max-loss-help" className="text-[11px] text-white/30 mt-1">
+                Stop trading when daily loss reaches this amount. Enter 0 to disable.
               </p>
             </div>
             <div>
@@ -737,7 +861,7 @@ export default function ActiveTradingPage() {
                 min={1}
                 max={20}
                 value={maxPositions}
-                onChange={(e) => setMaxPositions(Number(e.target.value))}
+                onChange={(e) => { setMaxPositions(Number(e.target.value)); }}
                 className="w-full accent-emerald-500"
               />
               <div className="flex justify-between text-[10px] text-white/25 font-mono">
