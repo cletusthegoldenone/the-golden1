@@ -87,12 +87,6 @@ function normalizeConversationHistory(
   return normalized;
 }
 
-function escapeForMarkdown(value: string): string {
-  return String(value)
-    .replace(/\\/g, '\\\\')
-    .replace(/([*_`[\]<>])/g, '\\$1');
-}
-
 async function callGeminiAPI(message: string, history: ConversationTurn[] = []): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
@@ -189,52 +183,6 @@ async function callUpstreamChat(
   }
 }
 
-function mockResponse(question: string, history: ClientConversationTurn[] = []): string {
-  const q = question.toLowerCase();
-  const recentUserTurns = history.filter((turn) => turn.role === 'user');
-  const previousUserMessage = escapeForMarkdown(
-    recentUserTurns[recentUserTurns.length - 1]?.content?.trim() ?? ''
-  );
-  const isFollowUp =
-    /^(and|also|what about|how about|why|how|when|where|which|can you|could you|go deeper|elaborate|expand|compare)\b/i.test(
-      question.trim()
-    );
-
-  if (isFollowUp && previousUserMessage) {
-    return `Let's build on your last point about **${previousUserMessage}**.\n\nGive me one more specific angle — for example the **risk**, **setup**, **metrics**, or **trade thesis** you want to unpack — and I'll stay on that thread instead of resetting the conversation.`;
-  }
-
-  if (q.includes('signal') || q.includes('scanner')) {
-    return `**Cletus Signal Engine** scans 500+ Solana micro-cap tokens every 15 seconds.\n\n**What I actually look for first:**\n- 🔥 Volume spike: 5m volume >5% of market cap\n- 📈 Momentum breakout: >5% price increase in 5m\n- 💧 Liquidity build: growing LP depth\n- 🐋 Buy pressure: buys >70% of 5m txns\n\nIf you want, I can go deeper on **how I weight those signals**, **what score is tradable**, or **how I size risk once a token qualifies**.`;
-  }
-  if (q.includes('stake') || q.includes('staking')) {
-    return `**Cletus Staking Tiers:**\n\nStaking $CLETUS unlocks your **monthly platform trading limit** — the maximum Cletus can trade on your behalf each month. Staking does **not** pay SOL rewards or profit sharing.\n\n- **Starter** (500K CLETUS): $750/mo trading limit\n- **Growth** (2M CLETUS): $1,500/mo trading limit\n- **Pro** (5M CLETUS): $3,000/mo trading limit\n- **Elite** (10M CLETUS): $10,000/mo trading limit\n- **Whale** (25M+ CLETUS): Unlimited trading limit\n\nA 1% trade fee applies on every close: 20% developer, 25% platform access pool, 30% platform upgrades, 25% digital bank fund. $CLETUS token is coming soon — staking opens at launch.`;
-  }
-  if (q.includes('rug') || q.includes('scam')) {
-    return `**Rug Detection Checklist:**\n\n- ✅ Check rugcheck.xyz for risk score\n- ✅ Verify LP is locked (>6 months ideal)\n- ✅ Dev wallet <5% of supply\n- ✅ No honeypot in contract\n- ✅ Cletus rug database: known bad devs flagged automatically`;
-  }
-  if (q.includes('solana') || q.includes('sol')) {
-    return `**Solana DeFi Quick Overview:**\n\n- ⚡ 65k TPS, sub-$0.001 fees\n- 🔥 Hottest DEXes: Raydium, Orca, Meteora\n- 📊 Key metrics: Birdeye or DexScreener\n\nWhat specifically about Solana would you like to know?`;
-  }
-  if (q.includes('gdp') || q.includes('inflation') || q.includes('fed') || q.includes('interest rate') || q.includes('econom')) {
-    return `**Economics Fundamentals:**\n\n**GDP** (Gross Domestic Product) = C + I + G + (X – M) — the total value of goods and services produced in an economy.\n\n**Inflation** is measured by CPI and PCE. The Fed targets ~2% inflation. When inflation runs hot, the Fed raises rates to cool spending and borrowing.\n\n**Federal Reserve Tools:**\n- Federal Funds Rate (short-term rate)\n- Open Market Operations (buying/selling Treasuries)\n- Reserve Requirements\n- Quantitative Easing / Tightening\n\n**Yield Curve:** When short-term rates > long-term rates (inverted), a recession often follows within 12–18 months — historically the most reliable leading indicator.`;
-  }
-  if (q.includes('p/e') || q.includes('balance sheet') || q.includes('income statement') || q.includes('accounting') || q.includes('ebitda') || q.includes('dcf')) {
-    return `**Key Accounting & Valuation Concepts:**\n\n**Financial Statements:**\n- Income Statement: Revenue → Gross Profit → EBITDA → Net Income\n- Balance Sheet: Assets = Liabilities + Equity\n- Cash Flow Statement: Operating / Investing / Financing activities\n\n**Common Ratios:**\n| Metric | Formula | Meaning |\n|--------|---------|----------|\n| P/E | Price / EPS | How much you pay per $1 of earnings |\n| EV/EBITDA | Enterprise Value / EBITDA | Whole-company valuation |\n| ROE | Net Income / Equity | Profitability on shareholder funds |\n| Debt/Equity | Total Debt / Equity | Leverage level |\n\n**DCF Valuation:** Sum of discounted future cash flows. The discount rate = WACC. Highly sensitive to terminal growth rate assumptions.`;
-  }
-  if (q.includes('option') || q.includes('call') || q.includes('put') || q.includes('greek') || q.includes('delta') || q.includes('theta')) {
-    return `**Options Trading Essentials:**\n\n**Calls & Puts:**\n- Call = right to BUY at strike price → profits when stock rises\n- Put = right to SELL at strike price → profits when stock falls\n\n**The Greeks:**\n| Greek | Measures |\n|-------|----------|\n| Delta (Δ) | Price sensitivity to $1 move in underlying |\n| Gamma (Γ) | Rate of change of delta |\n| Theta (Θ) | Time decay — options lose value daily |\n| Vega (ν) | Sensitivity to implied volatility changes |\n| Rho (ρ) | Sensitivity to interest rate changes |\n\n**Common Strategies:** Covered call, protective put, bull call spread, iron condor (neutral), long straddle (high-volatility bet).`;
-  }
-  if (q.includes('porter') || q.includes('strategy') || q.includes('competitive') || q.includes('moat') || q.includes('business model')) {
-    return `**Business Strategy Frameworks:**\n\n**Porter's Five Forces:**\n1. Threat of new entrants\n2. Bargaining power of suppliers\n3. Bargaining power of buyers\n4. Threat of substitutes\n5. Industry rivalry\n\n**Competitive Moats (Warren Buffett):**\n- Network effects (Visa, Meta)\n- Cost advantages (Walmart, Costco)\n- Switching costs (Salesforce, Oracle)\n- Intangible assets (patents, brands)\n- Efficient scale (regulated utilities)\n\n**Blue Ocean Strategy:** Create uncontested market space instead of competing in existing markets.`;
-  }
-  if (q.includes('portfolio') || q.includes('sharpe') || q.includes('capm') || q.includes('diversif')) {
-    return `**Portfolio Theory Fundamentals:**\n\n**Modern Portfolio Theory (Markowitz):**\n- Diversification reduces unsystematic risk\n- Efficient Frontier: portfolios with max return for a given risk level\n- Adding uncorrelated assets improves risk-adjusted returns\n\n**CAPM:** Expected Return = Rf + β × (Rm − Rf)\n- Rf = risk-free rate (T-bills)\n- β = sensitivity to market movements\n- (Rm − Rf) = equity risk premium (~5–7% historically)\n\n**Sharpe Ratio** = (Return − Rf) / Standard Deviation\nHigher is better. A ratio above 1.0 is good; above 2.0 is excellent.`;
-  }
-
-  return `Give me the exact angle you want to explore and I'll stay with it.\n\nI can help with:\n- 📊 macro + markets\n- 📒 accounting + valuation\n- 📈 stocks + options\n- ⚡ Solana signals + token analysis\n\nIf you want a better answer, ask a concrete follow-up like **"compare two setups"**, **"stress-test this thesis"**, or **"walk me through the trade step by step."**`;
-}
-
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -277,7 +225,10 @@ export async function POST(request: NextRequest) {
         answer = await callGeminiAPI(message, history);
         usedLiveAI = true;
       } catch {
-        answer = mockResponse(message, normalizedHistory);
+        return NextResponse.json(
+          { error: 'Gemini AI is unavailable. Please try again.' },
+          { status: 502 }
+        );
       }
     }
 
