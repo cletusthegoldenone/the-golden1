@@ -312,6 +312,7 @@ export default function CletusAIPage() {
 
       const userLine = finalText.trim();
       const { history } = queueUserMessage(userLine);
+      let shouldRestartListening = false;
 
       try {
         const res = await fetch('/api/ai', {
@@ -326,7 +327,7 @@ export default function CletusAIPage() {
       const didSpeak = speak(answer);
       if (!didSpeak && liveOnRef.current) {
         setLiveStatus('listening');
-        restartRecognitionIfNeeded();
+        shouldRestartListening = true;
       }
     } catch {
       const fail = 'Connection error on voice. Try text chat.';
@@ -334,10 +335,13 @@ export default function CletusAIPage() {
       const didSpeak = speak(fail);
       if (!didSpeak && liveOnRef.current) {
         setLiveStatus('listening');
-        restartRecognitionIfNeeded();
+        shouldRestartListening = true;
       }
     } finally {
       voiceRequestInFlightRef.current = false;
+      if (shouldRestartListening) {
+        restartRecognitionIfNeeded();
+      }
     }
     };
 
