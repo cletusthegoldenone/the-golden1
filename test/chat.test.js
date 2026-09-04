@@ -86,3 +86,35 @@ test('handleChat sends the latest user message to Gemini only once', async () =>
     }
   }
 });
+
+test('handleChat returns 502 when Gemini is unavailable', async () => {
+  const originalFetch = global.fetch;
+  const originalApiKey = process.env.GEMINI_API_KEY;
+
+  process.env.GEMINI_API_KEY = 'test-key';
+
+  global.fetch = async () => ({
+    ok: false,
+    async text() {
+      return 'upstream failure';
+    },
+  });
+
+  try {
+    const result = await handleChat({
+      message: 'Test failure path',
+      history: [{ role: 'user', content: 'Prior turn' }],
+    });
+
+    assert.equal(result.status, 502);
+    assert.deepEqual(result.payload, { error: 'Gemini AI is unavailable. Please try again.' });
+  } finally {
+    global.fetch = originalFetch;
+
+    if (originalApiKey === undefined) {
+      delete process.env.GEMINI_API_KEY;
+    } else {
+      process.env.GEMINI_API_KEY = originalApiKey;
+    }
+  }
+});
