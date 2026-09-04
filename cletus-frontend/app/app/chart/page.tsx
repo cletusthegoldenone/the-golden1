@@ -188,19 +188,22 @@ function snapToNearestCandleTime(timestampMs: number, data: Candle[]): number | 
   if (!data.length) return null;
   const target = Math.floor(timestampMs / 1000);
   if (target < data[0].time || target > data[data.length - 1].time) return null;
+  let low = 0;
+  let high = data.length - 1;
 
-  let nearest = data[0].time;
-  let smallestDiff = Math.abs(target - nearest);
-
-  for (const candle of data) {
-    const diff = Math.abs(target - candle.time);
-    if (diff < smallestDiff) {
-      nearest = candle.time;
-      smallestDiff = diff;
-    }
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const value = data[mid].time;
+    if (value === target) return value;
+    if (value < target) low = mid + 1;
+    else high = mid - 1;
   }
 
-  return nearest;
+  const before = high >= 0 ? data[high].time : null;
+  const after = low < data.length ? data[low].time : null;
+  if (before == null) return after;
+  if (after == null) return before;
+  return Math.abs(target - before) <= Math.abs(after - target) ? before : after;
 }
 
 function normalizeCandles(input: unknown): Candle[] {
@@ -285,6 +288,7 @@ export default function TokenChartPage() {
   const chartRef = useRef<ReturnType<typeof import('lightweight-charts')['createChart']> | null>(null);
   const candleSeriesRef = useRef<unknown>(null);
   const volumeSeriesRef = useRef<unknown>(null);
+  const tradeActivityRequestRef = useRef(0);
 
   const searchTokens = useCallback(async (value: string) => {
     const trimmed = value.trim();
@@ -409,7 +413,7 @@ export default function TokenChartPage() {
     }
   }, []);
 
-  const loadTradeActivity = useCallback(async (mint: string) => {
+  const loadTradeActivity = useCallback(async (mint: string, requestId: number) => {
     if (!mint) {
       setTradeMovements([]);
       return;
@@ -418,14 +422,17 @@ export default function TokenChartPage() {
     setTradeActivityLoading(true);
 
     try {
-      const res = await fetch('/api/trade/positions', { cache: 'no-store' });
+      const res = await fetch(`/api/trade/positions?mint=${encodeURIComponent(mint)}`, {
+        cache: 'no-store',
+      });
       if (!res.ok) {
-        setTradeMovements([]);
+        if (tradeActivityRequestRef.current === requestId) {
+          setTradeMovements([]);
+        }
         return;
       }
 
       const data = await res.json();
-      const normalizedMint = mint.trim().toLowerCase();
       const open: OpenTradePosition[] = Array.isArray(data.open)
         ? data.open
             .map(normalizeTradePosition)
@@ -437,12 +444,8 @@ export default function TokenChartPage() {
             .filter((item: ClosedTradePosition | null): item is ClosedTradePosition => Boolean(item))
         : [];
 
-      const positionsForToken = [...open, ...closed].filter(
-        (position) => position.tokenAddress.trim().toLowerCase() === normalizedMint
-      );
-      const closedForToken = closed.filter(
-        (position) => position.tokenAddress.trim().toLowerCase() === normalizedMint
-      );
+      const positionsForToken = [...open, ...closed];
+      const closedForToken = closed;
 
       const nextMovements = [
         ...positionsForToken.map((position) => ({
@@ -467,11 +470,17 @@ export default function TokenChartPage() {
         }),
       ].sort((a, b) => b.timestamp - a.timestamp);
 
-      setTradeMovements(nextMovements);
+      if (tradeActivityRequestRef.current === requestId) {
+        setTradeMovements(nextMovements);
+      }
     } catch {
-      setTradeMovements([]);
+      if (tradeActivityRequestRef.current === requestId) {
+        setTradeMovements([]);
+      }
     } finally {
-      setTradeActivityLoading(false);
+      if (tradeActivityRequestRef.current === requestId) {
+        setTradeActivityLoading(false);
+      }
     }
   }, []);
 
@@ -496,13 +505,18 @@ export default function TokenChartPage() {
   useEffect(() => {
     const mint = selected?.address?.trim();
     if (!mint) {
+      tradeActivityRequestRef.current += 1;
+      setTradeActivityLoading(false);
       setTradeMovements([]);
       return;
     }
 
-    void loadTradeActivity(mint);
+    tradeActivityRequestRef.current += 1;
+    const requestId = tradeActivityRequestRef.current;
+    void loadTradeActivity(mint, requestId);
     const interval = setInterval(() => {
-      void loadTradeActivity(mint);
+      tradeActivityRequestRef.current += 1;
+      void loadTradeActivity(mint, tradeActivityRequestRef.current);
     }, 10_000);
 
     return () => clearInterval(interval);
