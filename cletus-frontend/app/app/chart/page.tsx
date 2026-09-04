@@ -153,7 +153,7 @@ function derivePriceFormat(candles: Candle[]): { precision: number; minMove: num
     return { precision: 6, minMove: 0.000001 };
   }
 
-  const precision = Math.min(12, Math.max(2, Math.ceil(-Math.log10(minAbsPrice)) + 2));
+  const precision = Math.min(16, Math.max(2, Math.ceil(-Math.log10(minAbsPrice)) + 2));
   return { precision, minMove: Number(`1e-${precision}`) };
 }
 
