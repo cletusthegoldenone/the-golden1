@@ -237,7 +237,7 @@ export async function POST(request: NextRequest) {
             (entry: unknown): entry is { role?: unknown; content?: unknown } =>
               typeof entry === 'object' && entry !== null
           )
-          .map((entry) => ({
+          .map((entry: { role?: unknown; content?: unknown }) => ({
             role: typeof entry.role === 'string' ? entry.role : '',
             content: typeof entry.content === 'string' ? entry.content : '',
           }))
