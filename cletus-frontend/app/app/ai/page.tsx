@@ -13,6 +13,7 @@ import Link from 'next/link';
 type ChatMessage = {
   role: 'user' | 'assistant';
   content: string;
+  includeInHistory?: boolean;
 };
 
 type TokenSignal = {
@@ -75,12 +76,25 @@ const FALLBACK_SIGNALS: TokenSignal[] = [
   { id: '8', symbol: 'W', side: 'LONG', score: 70, change24h: 0.9, note: 'Hold above support' },
 ];
 
+const MAX_CHAT_HISTORY_TURNS = 20;
+
+function buildConversationHistory(messages: ChatMessage[]) {
+  return messages
+    .filter((message) => message.includeInHistory !== false && message.content.trim())
+    .slice(-MAX_CHAT_HISTORY_TURNS)
+    .map(({ role, content }) => ({
+      role,
+      content: content.trim(),
+    }));
+}
+
 export default function CletusAIPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: 'assistant',
       content:
         "Hey — I'm Cletus. Ask me about Solana tokens, signals, risk, or your setup. I'm software, not a human advisor. Trading can lose money.",
+      includeInHistory: false,
     },
   ]);
   const [input, setInput] = useState('');
@@ -90,11 +104,57 @@ export default function CletusAIPage() {
   const [liveStatus, setLiveStatus] = useState<'idle' | 'listening' | 'speaking' | 'error'>('idle');
   const [liveTranscript, setLiveTranscript] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef(messages);
+  const liveStatusRef = useRef(liveStatus);
+  const voiceRequestInFlightRef = useRef(false);
+  const recognitionActiveRef = useRef(false);
+  const resumeRecognitionAfterSpeechRef = useRef(false);
+  const suppressRecognitionRestartRef = useRef(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const liveOnRef = useRef(false);
 
   useEffect(() => { liveOnRef.current = liveOn; }, [liveOn]);
+  useEffect(() => { liveStatusRef.current = liveStatus; }, [liveStatus]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  const restartRecognitionIfNeeded = useCallback(() => {
+    if (
+      !recognitionRef.current ||
+      !liveOnRef.current ||
+      voiceRequestInFlightRef.current ||
+      liveStatusRef.current === 'speaking' ||
+      recognitionActiveRef.current
+    ) {
+      return;
+    }
+
+    try {
+      recognitionRef.current.start();
+    } catch {
+      // ignore restart race
+    }
+  }, []);
+
+  const appendMessage = useCallback((message: ChatMessage) => {
+    const next = [...messagesRef.current, message];
+    messagesRef.current = next;
+    setMessages(next);
+  }, []);
+
+  const queueUserMessage = useCallback((content: string) => {
+    const userMessage: ChatMessage = { role: 'user', content };
+    const nextMessages = [...messagesRef.current, userMessage];
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+
+    return {
+      history: buildConversationHistory(nextMessages).slice(0, -1),
+      userMessage,
+    };
+  }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -143,10 +203,9 @@ export default function CletusAIPage() {
 
   const sendChat = async () => {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || voiceRequestInFlightRef.current) return;
     setInput('');
-    const next = [...messages, { role: 'user' as const, content: text }];
-    setMessages(next);
+    const { history } = queueUserMessage(text);
     setLoading(true);
     try {
       const res = await fetch('/api/ai', {
@@ -154,41 +213,51 @@ export default function CletusAIPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: text,
-          history: next.slice(-20),
+          history,
         }),
       });
       const data = await res.json();
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: data.answer ?? data.message ?? 'Something went wrong. Try again.',
-        },
-      ]);
+      appendMessage({
+        role: 'assistant',
+        content: data.answer ?? data.message ?? 'Something went wrong. Try again.',
+      });
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: 'Connection error. Please try again.' },
-      ]);
+      appendMessage({ role: 'assistant', content: 'Connection error. Please try again.' });
     } finally {
       setLoading(false);
     }
   };
 
   const speak = (text: string) => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    if (typeof window === 'undefined' || !window.speechSynthesis) return false;
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.rate = 1;
     u.onstart = () => setLiveStatus('speaking');
-    u.onend = () => setLiveStatus(liveOnRef.current ? 'listening' : 'idle');
+    u.onend = () => {
+      if (liveOnRef.current) {
+        setLiveStatus('listening');
+        if (voiceRequestInFlightRef.current) {
+          resumeRecognitionAfterSpeechRef.current = true;
+          return;
+        }
+        restartRecognitionIfNeeded();
+      } else {
+        setLiveStatus('idle');
+      }
+    };
     window.speechSynthesis.speak(u);
+    return true;
   };
 
   const stopLive = useCallback(() => {
     setLiveOn(false);
+    liveOnRef.current = false;
     setLiveStatus('idle');
     setLiveTranscript('');
+    voiceRequestInFlightRef.current = false;
+    resumeRecognitionAfterSpeechRef.current = false;
+    suppressRecognitionRestartRef.current = true;
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -215,6 +284,7 @@ export default function CletusAIPage() {
     }
 
     setLiveOn(true);
+    liveOnRef.current = true;
     setLiveStatus('listening');
     setLiveTranscript('Listening… speak to Cletus');
 
@@ -222,6 +292,9 @@ export default function CletusAIPage() {
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
+    recognition.onstart = () => {
+      recognitionActiveRef.current = true;
+    };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     recognition.onresult = async (event: any) => {
@@ -231,44 +304,78 @@ export default function CletusAIPage() {
         if (event.results[i].isFinal) finalText += piece;
       }
       if (!finalText.trim()) return;
+      if (voiceRequestInFlightRef.current) return;
 
       setLiveTranscript(finalText.trim());
       setLiveStatus('speaking');
+      voiceRequestInFlightRef.current = true;
+      suppressRecognitionRestartRef.current = true;
+      try {
+        recognition.stop();
+      } catch {
+        // ignore stop race
+      }
 
       const userLine = finalText.trim();
-      setMessages((prev) => [...prev, { role: 'user', content: userLine }]);
+      const { history } = queueUserMessage(userLine);
+      let shouldRestartListening = false;
 
       try {
         const res = await fetch('/api/ai', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: userLine, voice: true }),
+          body: JSON.stringify({ message: userLine, history, voice: true }),
         });
         const data = await res.json();
         const answer =
           data.answer ?? data.message ?? "I didn't catch that. Try again.";
-        setMessages((prev) => [...prev, { role: 'assistant', content: answer }]);
-        speak(answer);
+        appendMessage({ role: 'assistant', content: answer });
+        const didSpeak = speak(answer);
+        if (!didSpeak && liveOnRef.current) {
+          setLiveStatus('listening');
+          shouldRestartListening = true;
+        }
       } catch {
         const fail = 'Connection error on voice. Try text chat.';
-        setMessages((prev) => [...prev, { role: 'assistant', content: fail }]);
-        speak(fail);
+        appendMessage({ role: 'assistant', content: fail });
+        const didSpeak = speak(fail);
+        if (!didSpeak && liveOnRef.current) {
+          setLiveStatus('listening');
+          shouldRestartListening = true;
+        }
+      } finally {
+        voiceRequestInFlightRef.current = false;
+        if (shouldRestartListening || resumeRecognitionAfterSpeechRef.current) {
+          resumeRecognitionAfterSpeechRef.current = false;
+          restartRecognitionIfNeeded();
+        }
       }
     };
 
     recognition.onerror = () => {
       setLiveStatus('error');
       setLiveTranscript('Mic error — check permissions or use text chat.');
+      voiceRequestInFlightRef.current = false;
+      resumeRecognitionAfterSpeechRef.current = false;
+      liveOnRef.current = false;
+      setLiveOn(false);
+      suppressRecognitionRestartRef.current = true;
     };
 
     recognition.onend = () => {
-      if (recognitionRef.current && liveOnRef.current) {
-        try {
-          recognition.start();
-        } catch {
-          // ignore restart race
-        }
-      }
+    recognitionActiveRef.current = false;
+    if (suppressRecognitionRestartRef.current) {
+      suppressRecognitionRestartRef.current = false;
+      return;
+    }
+    if (
+      recognitionRef.current &&
+      liveOnRef.current &&
+      !voiceRequestInFlightRef.current &&
+      liveStatusRef.current !== 'speaking'
+    ) {
+      restartRecognitionIfNeeded();
+    }
     };
 
     recognitionRef.current = recognition;
@@ -277,7 +384,7 @@ export default function CletusAIPage() {
     } catch {
       setLiveStatus('error');
     }
-  }, [liveOn]);
+  }, [appendMessage, queueUserMessage, restartRecognitionIfNeeded]);
 
 
   useEffect(() => {
@@ -423,7 +530,7 @@ export default function CletusAIPage() {
                 <button
                   type="button"
                   onClick={sendChat}
-                  disabled={loading || !input.trim()}
+                  disabled={loading || voiceRequestInFlightRef.current || !input.trim()}
                   className="px-4 py-2.5 rounded-xl text-sm font-semibold bg-white text-black hover:bg-white/90 disabled:opacity-40 transition-all"
                 >
                   Send

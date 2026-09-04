@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSecComplianceContext } from '@/lib/sec-compliance';
 
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+const MAX_HISTORY_TURNS = 20;
 
 const SYSTEM_PROMPT = `You are Cletus, an AI with master's-degree-level expertise spanning five disciplines. Your primary focus is finance, economics, and trading. You can answer questions on other topics, but you excel especially in:
 
@@ -24,6 +25,11 @@ You are an expert on Solana micro-cap token signals, DeFi protocols, Jupiter DEX
 
 PERSONALITY & STYLE:
 - You are Cletus — confident, direct, knowledgeable, and conversational. You speak like a senior professor who also trades.
+- Answer the user's latest question immediately instead of reintroducing yourself.
+- Do not repeat your bio, capability list, or generic warnings unless the user asks or the context truly requires it.
+- When the user asks a follow-up, continue the same thread and reference the specific point they raised.
+- If the user's request is vague, ask one focused follow-up question that moves the conversation forward.
+- Vary your openings and phrasing so the conversation feels natural rather than templated.
 - You give thorough, expert-level answers. Use bullet points, numbered lists, tables, and **bold** for emphasis.
 - You maintain conversation context — refer back to earlier parts of the conversation naturally.
 - You never guarantee profits or give personalized financial advice, but you are not preachy about it.
@@ -40,6 +46,51 @@ ${getSecComplianceContext()}`;
 interface ConversationTurn {
   role: 'user' | 'model';
   parts: { text: string }[];
+}
+
+interface ClientConversationTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+function normalizeConversationHistory(
+  rawHistory: { role?: string; content?: string }[] = [],
+  latestMessage = ''
+): ClientConversationTurn[] {
+  const normalized = rawHistory
+    .map((entry) => {
+      const role =
+        entry?.role === 'assistant' || entry?.role === 'model'
+          ? 'assistant'
+          : entry?.role === 'user'
+            ? 'user'
+            : null;
+      const content = typeof entry?.content === 'string' ? entry.content.trim() : '';
+
+      if (!role || !content) return null;
+      return { role, content } satisfies ClientConversationTurn;
+    })
+    .filter((entry): entry is ClientConversationTurn => entry !== null)
+    .slice(-MAX_HISTORY_TURNS);
+
+  const trimmedLatestMessage = latestMessage.trim();
+  const lastTurn = normalized[normalized.length - 1];
+
+  if (
+    trimmedLatestMessage &&
+    lastTurn?.role === 'user' &&
+    lastTurn.content === trimmedLatestMessage
+  ) {
+    normalized.pop();
+  }
+
+  return normalized;
+}
+
+function escapeForMarkdown(value: string): string {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/([*_`[\]<>])/g, '\\$1');
 }
 
 async function callGeminiAPI(message: string, history: ConversationTurn[] = []): Promise<string> {
@@ -138,14 +189,26 @@ async function callUpstreamChat(
   }
 }
 
-function mockResponse(question: string): string {
+function mockResponse(question: string, history: ClientConversationTurn[] = []): string {
   const q = question.toLowerCase();
+  const recentUserTurns = history.filter((turn) => turn.role === 'user');
+  const previousUserMessage = escapeForMarkdown(
+    recentUserTurns[recentUserTurns.length - 1]?.content?.trim() ?? ''
+  );
+  const isFollowUp =
+    /^(and|also|what about|how about|why|how|when|where|which|can you|could you|go deeper|elaborate|expand|compare)\b/i.test(
+      question.trim()
+    );
+
+  if (isFollowUp && previousUserMessage) {
+    return `Let's build on your last point about **${previousUserMessage}**.\n\nGive me one more specific angle — for example the **risk**, **setup**, **metrics**, or **trade thesis** you want to unpack — and I'll stay on that thread instead of resetting the conversation.`;
+  }
 
   if (q.includes('signal') || q.includes('scanner')) {
-    return `**Cletus Signal Engine** scans 500+ Solana micro-cap tokens every 15 seconds.\n\n**Top signal types:**\n- 🔥 Volume spike: 5m volume >5% of market cap\n- 📈 Momentum breakout: >5% price increase in 5m\n- 💧 Liquidity build: growing LP depth\n- 🐋 Buy pressure: buys >70% of 5m txns\n\nHigh-score tokens (80+) are worth investigating. Always DYOR before entering.`;
+    return `**Cletus Signal Engine** scans 500+ Solana micro-cap tokens every 15 seconds.\n\n**What I actually look for first:**\n- 🔥 Volume spike: 5m volume >5% of market cap\n- 📈 Momentum breakout: >5% price increase in 5m\n- 💧 Liquidity build: growing LP depth\n- 🐋 Buy pressure: buys >70% of 5m txns\n\nIf you want, I can go deeper on **how I weight those signals**, **what score is tradable**, or **how I size risk once a token qualifies**.`;
   }
   if (q.includes('stake') || q.includes('staking')) {
-    return `**Cletus Staking Tiers:**\n\n- **Starter** (100K CLETUS): Core access + 0.5% APY in SOL\n- **Gold** (5M CLETUS): 0.5% APY + 5% monthly profit share\n- **Diamond** (25M CLETUS): 0.5% APY + 20% profit share + priority signals\n\nA 1% trade fee applies on every close: 20% developer, 25% staking rewards, 30% platform upgrades, 25% digital bank fund.`;
+    return `**Cletus Staking Tiers:**\n\nStaking $CLETUS unlocks your **monthly platform trading limit** — the maximum Cletus can trade on your behalf each month. Staking does **not** pay SOL rewards or profit sharing.\n\n- **Starter** (500K CLETUS): $750/mo trading limit\n- **Growth** (2M CLETUS): $1,500/mo trading limit\n- **Pro** (5M CLETUS): $3,000/mo trading limit\n- **Elite** (10M CLETUS): $10,000/mo trading limit\n- **Whale** (25M+ CLETUS): Unlimited trading limit\n\nA 1% trade fee applies on every close: 20% developer, 25% platform access pool, 30% platform upgrades, 25% digital bank fund. $CLETUS token is coming soon — staking opens at launch.`;
   }
   if (q.includes('rug') || q.includes('scam')) {
     return `**Rug Detection Checklist:**\n\n- ✅ Check rugcheck.xyz for risk score\n- ✅ Verify LP is locked (>6 months ideal)\n- ✅ Dev wallet <5% of supply\n- ✅ No honeypot in contract\n- ✅ Cletus rug database: known bad devs flagged automatically`;
@@ -169,23 +232,35 @@ function mockResponse(question: string): string {
     return `**Portfolio Theory Fundamentals:**\n\n**Modern Portfolio Theory (Markowitz):**\n- Diversification reduces unsystematic risk\n- Efficient Frontier: portfolios with max return for a given risk level\n- Adding uncorrelated assets improves risk-adjusted returns\n\n**CAPM:** Expected Return = Rf + β × (Rm − Rf)\n- Rf = risk-free rate (T-bills)\n- β = sensitivity to market movements\n- (Rm − Rf) = equity risk premium (~5–7% historically)\n\n**Sharpe Ratio** = (Return − Rf) / Standard Deviation\nHigher is better. A ratio above 1.0 is good; above 2.0 is excellent.`;
   }
 
-  return `I'm **Cletus** — your AI with master's-level knowledge across economics, accounting, business strategy, stock markets, options trading, and Solana DeFi.\n\n**Ask me anything about:**\n- 📊 Macro economics, GDP, inflation, Fed policy\n- 📒 Accounting ratios, DCF, financial statements\n- 🏢 Business strategy, Porter's Five Forces, competitive moats\n- 📈 Stocks, options (Greeks), portfolio theory, CAPM\n- ⚡ Solana signals, DeFi, rug detection, token analysis\n\nWhat would you like to explore?`;
+  return `Give me the exact angle you want to explore and I'll stay with it.\n\nI can help with:\n- 📊 macro + markets\n- 📒 accounting + valuation\n- 📈 stocks + options\n- ⚡ Solana signals + token analysis\n\nIf you want a better answer, ask a concrete follow-up like **"compare two setups"**, **"stress-test this thesis"**, or **"walk me through the trade step by step."**`;
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const message: string = body.message ?? body.question ?? '';
-    const rawHistory: { role: string; content: string }[] = Array.isArray(body.history) ? body.history : [];
+    const message =
+      (typeof body.message === 'string' ? body.message : '') ||
+      (typeof body.question === 'string' ? body.question : '');
 
     if (!message.trim()) {
       return NextResponse.json({ error: 'Message is required' }, { status: 400 });
     }
 
+    const rawHistory: { role: string; content: string }[] = Array.isArray(body.history)
+      ? body.history
+          .filter(
+            (entry: unknown): entry is { role?: unknown; content?: unknown } =>
+              typeof entry === 'object' && entry !== null
+          )
+          .map((entry: { role?: unknown; content?: unknown }) => ({
+            role: typeof entry.role === 'string' ? entry.role : '',
+            content: typeof entry.content === 'string' ? entry.content : '',
+          }))
+      : [];
+    const normalizedHistory = normalizeConversationHistory(rawHistory, message);
+
     // Convert client history format → Gemini conversation format
-    const history: ConversationTurn[] = rawHistory
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map((m) => ({
+    const history: ConversationTurn[] = normalizedHistory.map((m) => ({
         role: m.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: m.content }],
       }));
@@ -202,7 +277,7 @@ export async function POST(request: NextRequest) {
         answer = await callGeminiAPI(message, history);
         usedLiveAI = true;
       } catch {
-        answer = mockResponse(message);
+        answer = mockResponse(message, normalizedHistory);
       }
     }
 
