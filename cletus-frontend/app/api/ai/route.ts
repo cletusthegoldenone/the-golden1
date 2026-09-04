@@ -125,16 +125,19 @@ async function callGeminiAPI(message: string, history: ConversationTurn[] = []):
 }
 
 function getApiBaseUrl(): string {
-  const raw = process.env.API_BASE_URL?.trim();
-  if (!raw) return '';
-
-  try {
-    const parsed = new URL(raw);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
-    return raw.replace(/\/+$/, '');
-  } catch {
-    return '';
+  const candidates = [process.env.API_BASE_URL, process.env.NEXT_PUBLIC_API_URL];
+  for (const candidate of candidates) {
+    const raw = candidate?.trim();
+    if (!raw) continue;
+    try {
+      const parsed = new URL(raw);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue;
+      return raw.replace(/\/+$/, '');
+    } catch {
+      continue;
+    }
   }
+  return '';
 }
 
 async function callUpstreamChat(
@@ -216,7 +219,7 @@ export async function POST(request: NextRequest) {
     let answer: string;
     let usedLiveAI = false;
 
-    const upstream = await callUpstreamChat(message, rawHistory);
+    const upstream = await callUpstreamChat(message, normalizedHistory);
     if (upstream) {
       answer = upstream.answer;
       usedLiveAI = upstream.usedLiveAI;

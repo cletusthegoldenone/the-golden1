@@ -216,13 +216,23 @@ export default function CletusAIPage() {
           history,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const errorMessage =
+          (typeof data?.error === 'string' && data.error.trim()) ||
+          (typeof data?.message === 'string' && data.message.trim()) ||
+          `Request failed (${res.status})`;
+        throw new Error(errorMessage);
+      }
       appendMessage({
         role: 'assistant',
-        content: data.answer ?? data.message ?? 'Something went wrong. Try again.',
+        content: data.answer ?? data.message ?? data.error ?? 'Something went wrong. Try again.',
       });
-    } catch {
-      appendMessage({ role: 'assistant', content: 'Connection error. Please try again.' });
+    } catch (error) {
+      appendMessage({
+        role: 'assistant',
+        content: error instanceof Error ? error.message : 'Connection error. Please try again.',
+      });
     } finally {
       setLoading(false);
     }
@@ -326,17 +336,26 @@ export default function CletusAIPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: userLine, history, voice: true }),
         });
-        const data = await res.json();
-        const answer =
-          data.answer ?? data.message ?? "I didn't catch that. Try again.";
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const errorMessage =
+            (typeof data?.error === 'string' && data.error.trim()) ||
+            (typeof data?.message === 'string' && data.message.trim()) ||
+            `Request failed (${res.status})`;
+          throw new Error(errorMessage);
+        }
+        const answer = data.answer ?? data.message ?? data.error ?? "I didn't catch that. Try again.";
         appendMessage({ role: 'assistant', content: answer });
         const didSpeak = speak(answer);
         if (!didSpeak && liveOnRef.current) {
           setLiveStatus('listening');
           shouldRestartListening = true;
         }
-      } catch {
-        const fail = 'Connection error on voice. Try text chat.';
+      } catch (error) {
+        const fail =
+          error instanceof Error && error.message
+            ? error.message
+            : 'Connection error on voice. Try text chat.';
         appendMessage({ role: 'assistant', content: fail });
         const didSpeak = speak(fail);
         if (!didSpeak && liveOnRef.current) {
