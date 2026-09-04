@@ -108,6 +108,7 @@ export default function CletusAIPage() {
   const liveStatusRef = useRef(liveStatus);
   const voiceRequestInFlightRef = useRef(false);
   const recognitionActiveRef = useRef(false);
+  const resumeRecognitionAfterSpeechRef = useRef(false);
   const suppressRecognitionRestartRef = useRef(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
@@ -236,6 +237,10 @@ export default function CletusAIPage() {
     u.onend = () => {
       if (liveOnRef.current) {
         setLiveStatus('listening');
+        if (voiceRequestInFlightRef.current) {
+          resumeRecognitionAfterSpeechRef.current = true;
+          return;
+        }
         restartRecognitionIfNeeded();
       } else {
         setLiveStatus('idle');
@@ -251,6 +256,7 @@ export default function CletusAIPage() {
     setLiveStatus('idle');
     setLiveTranscript('');
     voiceRequestInFlightRef.current = false;
+    resumeRecognitionAfterSpeechRef.current = false;
     suppressRecognitionRestartRef.current = true;
     if (recognitionRef.current) {
       try {
@@ -339,7 +345,8 @@ export default function CletusAIPage() {
       }
     } finally {
       voiceRequestInFlightRef.current = false;
-      if (shouldRestartListening) {
+      if (shouldRestartListening || resumeRecognitionAfterSpeechRef.current) {
+        resumeRecognitionAfterSpeechRef.current = false;
         restartRecognitionIfNeeded();
       }
     }
@@ -349,6 +356,7 @@ export default function CletusAIPage() {
     setLiveStatus('error');
     setLiveTranscript('Mic error — check permissions or use text chat.');
     voiceRequestInFlightRef.current = false;
+    resumeRecognitionAfterSpeechRef.current = false;
     liveOnRef.current = false;
     setLiveOn(false);
     suppressRecognitionRestartRef.current = true;
