@@ -231,8 +231,9 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const message: string = body.message ?? body.question ?? '';
+    const rawHistory: { role?: string; content?: string }[] = Array.isArray(body.history) ? body.history : [];
     const normalizedHistory = normalizeConversationHistory(
-      Array.isArray(body.history) ? body.history : [],
+      rawHistory,
       message
     );
 
@@ -249,7 +250,7 @@ export async function POST(request: NextRequest) {
     let answer: string;
     let usedLiveAI = false;
 
-    const upstream = await callUpstreamChat(message, normalizedHistory);
+    const upstream = await callUpstreamChat(message, rawHistory);
     if (upstream) {
       answer = upstream.answer;
       usedLiveAI = upstream.usedLiveAI;
