@@ -133,6 +133,56 @@ function formatPriceDisplay(value?: number) {
   return formatted === '—' ? formatted : `$${formatted}`;
 }
 
+function derivePriceFormat(candles: Candle[]): { precision: number; minMove: number } {
+  if (!candles.length) {
+    return { precision: 6, minMove: 0.000001 };
+  }
+
+  let minAbsPrice = Number.POSITIVE_INFINITY;
+  const points: number[] = [];
+  for (const candle of candles) {
+    const values = [candle.open, candle.high, candle.low, candle.close];
+    for (const value of values) {
+      const abs = Math.abs(value);
+      if (Number.isFinite(abs) && abs > 0 && abs < minAbsPrice) {
+        minAbsPrice = abs;
+      }
+      if (Number.isFinite(value) && value > 0) {
+        points.push(value);
+      }
+    }
+  }
+
+  if (!Number.isFinite(minAbsPrice)) {
+    return { precision: 6, minMove: 0.000001 };
+  }
+
+  points.sort((a, b) => a - b);
+  let minStep = Number.POSITIVE_INFINITY;
+  for (let i = 1; i < points.length; i += 1) {
+    const step = points[i] - points[i - 1];
+    if (step > 0 && step < minStep) {
+      minStep = step;
+    }
+  }
+
+  const normalizeStep = (value: number) => Number.parseFloat(value.toPrecision(12));
+  const precisionForValue = (value: number) => {
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    const [mantissa, exponentRaw] = value.toExponential().split('e');
+    const exponent = Number.parseInt(exponentRaw, 10);
+    const mantissaDecimals = (mantissa.split('.')[1] || '').length;
+    return Math.max(0, -exponent + mantissaDecimals);
+  };
+
+  const minStepValue = Number.isFinite(minStep) ? normalizeStep(minStep) : null;
+  const precisionFromStep = minStepValue != null ? precisionForValue(minStepValue) : 0;
+  const precisionFromPrice = Math.ceil(-Math.log10(minAbsPrice)) + 2;
+  const precision = Math.min(16, Math.max(2, Math.max(precisionFromStep, precisionFromPrice)));
+  const minMove = minStepValue != null && minStepValue > 0 ? minStepValue : Number(`1e-${precision}`);
+  return { precision, minMove };
+}
+
 function formatPercent(value?: number) {
   if (value == null || !Number.isFinite(value)) return '—';
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
@@ -615,6 +665,11 @@ export default function TokenChartPage() {
           wickUpColor: '#10b981',
           wickDownColor: '#ef4444',
           priceLineVisible: false,
+          priceFormat: {
+            type: 'price',
+            precision: 6,
+            minMove: 0.000001,
+          },
         });
 
         const volumeSeries = chart.addHistogramSeries({
@@ -684,12 +739,27 @@ export default function TokenChartPage() {
       low: candle.low,
       close: candle.close,
     }));
+    const priceFormat = derivePriceFormat(displayedCandles);
 
     const chartVolume = displayedCandles.map((candle) => ({
       time: candle.time as unknown as import('lightweight-charts').Time,
       value: candle.volume ?? 0,
       color: candle.close >= candle.open ? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.35)',
     }));
+
+    (
+      candleSeriesRef.current as {
+        applyOptions?: (options: {
+          priceFormat?: { type: 'price'; precision: number; minMove: number };
+        }) => void;
+      }
+    ).applyOptions?.({
+      priceFormat: {
+        type: 'price',
+        precision: priceFormat.precision,
+        minMove: priceFormat.minMove,
+      },
+    });
 
     (candleSeriesRef.current as { setData: (data: unknown[]) => void }).setData(chartCandles);
     (volumeSeriesRef.current as { setData: (data: unknown[]) => void }).setData(chartVolume);
