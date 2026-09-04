@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
 
 type TokenResult = {
@@ -76,6 +75,41 @@ const RANGE_CONFIG: Record<Range, { timeframe: string; count: string }> = {
   '1W': { timeframe: '1w', count: '104' },
 };
 
+const DEFAULT_SYMBOL = 'BONK';
+const DEFAULT_MINT = 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263';
+
+function normalizeTokenResults(list: unknown[]): TokenResult[] {
+  return list.reduce<TokenResult[]>((acc, item) => {
+      const token = item as Partial<TokenResult>;
+      const symbol = typeof token.symbol === 'string' ? token.symbol.trim() : '';
+      const name = typeof token.name === 'string' ? token.name.trim() : '';
+      const address = typeof token.address === 'string' ? token.address.trim() : '';
+      const id = typeof token.id === 'string' ? token.id.trim() : address || symbol || name;
+      if (!id || (!symbol && !name && !address)) return acc;
+
+      acc.push({
+        id,
+        symbol: symbol || name || address.slice(0, 6),
+        name: name || symbol || 'Unknown token',
+        address,
+        image: typeof token.image === 'string' ? token.image : undefined,
+        priceUsd: typeof token.priceUsd === 'number' ? token.priceUsd : undefined,
+        change24h: typeof token.change24h === 'number' ? token.change24h : undefined,
+        volume24h: typeof token.volume24h === 'number' ? token.volume24h : undefined,
+        mcap: typeof token.mcap === 'number' ? token.mcap : undefined,
+        fdv: typeof token.fdv === 'number' ? token.fdv : undefined,
+        liquidityUsd: typeof token.liquidityUsd === 'number' ? token.liquidityUsd : undefined,
+        txns24h: typeof token.txns24h === 'number' ? token.txns24h : undefined,
+        holders: typeof token.holders === 'number' ? token.holders : undefined,
+        dex: typeof token.dex === 'string' ? token.dex : 'Unknown',
+        chain: typeof token.chain === 'string' ? token.chain : 'Solana',
+        quoteSymbol: 'USDC',
+        pairAddress: typeof token.pairAddress === 'string' ? token.pairAddress : undefined,
+      });
+      return acc;
+    }, []);
+}
+
 function formatUsd(value?: number) {
   if (value == null || !Number.isFinite(value)) return '—';
   const abs = Math.abs(value);
@@ -116,6 +150,17 @@ function truncateAddress(value?: string) {
   if (!value) return '—';
   if (value.length <= 12) return value;
   return `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+function parseTimestamp(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 0 && value < 100_000_000_000 ? value * 1000 : value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
 }
 
 function normalizeTimestamp(value: unknown): number | null {
@@ -265,7 +310,7 @@ function normalizeCandles(input: unknown): Candle[] {
       deduped.push(candle);
     }
   }
-
+  return deduped;
   return deduped;
 }
 
@@ -278,6 +323,7 @@ export default function TokenChartPage() {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
   const [range, setRange] = useState<Range>('15m');
+  const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [chartSource, setChartSource] = useState('DexScreener / Helius');
   const [chartReady, setChartReady] = useState(false);
@@ -289,6 +335,18 @@ export default function TokenChartPage() {
   const candleSeriesRef = useRef<unknown>(null);
   const volumeSeriesRef = useRef<unknown>(null);
   const tradeActivityRequestRef = useRef(0);
+
+  const fetchTokenResults = useCallback(async (term: string): Promise<TokenResult[]> => {
+    const res = await fetch(`/api/tokens?q=${encodeURIComponent(term)}`);
+    if (!res.ok) throw new Error('search-unavailable');
+    const data = await res.json();
+    const list: unknown[] = Array.isArray(data.tokens)
+      ? data.tokens
+      : Array.isArray(data.results)
+        ? data.results
+        : [];
+    return normalizeTokenResults(list);
+  }, []);
 
   const searchTokens = useCallback(async (value: string) => {
     const trimmed = value.trim();
@@ -305,53 +363,7 @@ export default function TokenChartPage() {
     setHasSearched(true);
 
     try {
-      const res = await fetch(`/api/tokens?q=${encodeURIComponent(trimmed)}`);
-      if (!res.ok) {
-        setResults([]);
-        setError('Search unavailable. Try again.');
-        return;
-      }
-
-      const data = await res.json();
-      const list = Array.isArray(data.tokens)
-        ? data.tokens
-        : Array.isArray(data.results)
-          ? data.results
-          : [];
-
-      const normalized = list
-        .map((item: Partial<TokenResult>) => {
-          const symbol = typeof item.symbol === 'string' ? item.symbol.trim() : '';
-          const name = typeof item.name === 'string' ? item.name.trim() : '';
-          const address = typeof item.address === 'string' ? item.address.trim() : '';
-          const id = typeof item.id === 'string' ? item.id.trim() : address || symbol || name;
-          if (!id || (!symbol && !name && !address)) return null;
-
-          return {
-            id,
-            symbol: symbol || name || address.slice(0, 6),
-            name: name || symbol || 'Unknown token',
-            address,
-            image: typeof item.image === 'string' ? item.image : undefined,
-            priceUsd: typeof item.priceUsd === 'number' ? item.priceUsd : undefined,
-            change24h: typeof item.change24h === 'number' ? item.change24h : undefined,
-            volume24h: typeof item.volume24h === 'number' ? item.volume24h : undefined,
-            mcap: typeof item.mcap === 'number' ? item.mcap : undefined,
-            fdv: typeof item.fdv === 'number' ? item.fdv : undefined,
-            liquidityUsd: typeof item.liquidityUsd === 'number' ? item.liquidityUsd : undefined,
-            txns24h: typeof item.txns24h === 'number' ? item.txns24h : undefined,
-            holders: typeof item.holders === 'number' ? item.holders : undefined,
-            dex: typeof item.dex === 'string' ? item.dex : 'Unknown',
-            chain: typeof item.chain === 'string' ? item.chain : 'Solana',
-            quoteSymbol:
-              typeof item.quoteSymbol === 'string' && item.quoteSymbol.trim()
-                ? item.quoteSymbol.trim().toUpperCase()
-                : 'USDC',
-            pairAddress: typeof item.pairAddress === 'string' ? item.pairAddress : undefined,
-          } satisfies TokenResult;
-        })
-        .filter((item: TokenResult | null): item is TokenResult => Boolean(item));
-
+      const normalized = await fetchTokenResults(trimmed);
       setResults(normalized);
     } catch {
       setResults([]);
@@ -359,11 +371,12 @@ export default function TokenChartPage() {
     } finally {
       setSearching(false);
     }
-  }, []);
+  }, [fetchTokenResults]);
 
   const loadChart = useCallback(async (mint: string, symbol: string, quoteSymbol: string, nextRange: Range) => {
     if (!mint) {
       setCandles([]);
+      setLastFetchedAt(null);
       setError('Token mint missing. Pick a different token.');
       return;
     }
@@ -371,6 +384,7 @@ export default function TokenChartPage() {
     const config = RANGE_CONFIG[nextRange];
     setChartLoading(true);
     setCandles([]);
+    setLastFetchedAt(null);
     setError('');
 
     try {
@@ -384,6 +398,7 @@ export default function TokenChartPage() {
       const res = await fetch(`/api/prices?${params}`);
       if (!res.ok) {
         setCandles([]);
+        setLastFetchedAt(null);
         setError('Chart data unavailable for this token.');
         return;
       }
@@ -391,6 +406,7 @@ export default function TokenChartPage() {
       const data = await res.json();
       const nextCandles = normalizeCandles(data.candles);
       setCandles(nextCandles);
+      setLastFetchedAt(parseTimestamp(data.lastUpdated));
       setChartSource(typeof data.source === 'string' ? data.source : 'DexScreener / Helius');
       setSelected((prev) =>
         prev
@@ -407,6 +423,7 @@ export default function TokenChartPage() {
       );
     } catch {
       setCandles([]);
+      setLastFetchedAt(null);
       setError('Failed to load chart.');
     } finally {
       setChartLoading(false);
@@ -527,6 +544,30 @@ export default function TokenChartPage() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const bootstrapDefaultToken = async () => {
+      try {
+        const normalized = await fetchTokenResults(DEFAULT_SYMBOL);
+        if (!normalized.length || cancelled) return;
+        const preferred =
+          normalized.find((token) => token.address === DEFAULT_MINT) ??
+          normalized.find((token) => token.symbol.toUpperCase() === DEFAULT_SYMBOL) ??
+          normalized[0];
+        setSelected({ ...preferred, quoteSymbol: 'USDC' });
+        setQuery(preferred.symbol || preferred.name || DEFAULT_SYMBOL);
+      } catch {
+        // no-op; empty chart state already handled
+      }
+    };
+
+    void bootstrapDefaultToken();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchTokenResults]);
+
+  useEffect(() => {
     if (!selected || !chartContainerRef.current) return;
 
     let resizeObserver: ResizeObserver | null = null;
@@ -620,10 +661,12 @@ export default function TokenChartPage() {
     };
   }, [selected]);
 
+  const displayedCandles = candles;
+
   useEffect(() => {
     if (!candleSeriesRef.current || !volumeSeriesRef.current || !chartRef.current || !chartReady) return;
 
-    if (!candles.length) {
+    if (!displayedCandles.length) {
       (candleSeriesRef.current as { setData: (data: unknown[]) => void }).setData([]);
       (volumeSeriesRef.current as { setData: (data: unknown[]) => void }).setData([]);
       (
@@ -634,7 +677,7 @@ export default function TokenChartPage() {
       return;
     }
 
-    const chartCandles = candles.map((candle) => ({
+    const chartCandles = displayedCandles.map((candle) => ({
       time: candle.time as unknown as import('lightweight-charts').Time,
       open: candle.open,
       high: candle.high,
@@ -642,7 +685,7 @@ export default function TokenChartPage() {
       close: candle.close,
     }));
 
-    const chartVolume = candles.map((candle) => ({
+    const chartVolume = displayedCandles.map((candle) => ({
       time: candle.time as unknown as import('lightweight-charts').Time,
       value: candle.volume ?? 0,
       color: candle.close >= candle.open ? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.35)',
@@ -651,7 +694,7 @@ export default function TokenChartPage() {
     (candleSeriesRef.current as { setData: (data: unknown[]) => void }).setData(chartCandles);
     (volumeSeriesRef.current as { setData: (data: unknown[]) => void }).setData(chartVolume);
     chartRef.current.timeScale().fitContent();
-  }, [candles, chartReady]);
+  }, [displayedCandles, chartReady]);
 
   const chartMarkers = useMemo(() => {
     if (!candles.length) return [];
@@ -695,11 +738,11 @@ export default function TokenChartPage() {
     if (!selected) return [];
 
     const items = [
-      { label: 'Market Cap', value: formatUsd(selected.mcap) },
+      { label: 'Mcap', value: formatUsd(selected.mcap) },
       { label: 'FDV', value: formatUsd(selected.fdv) },
-      { label: 'Liquidity', value: formatUsd(selected.liquidityUsd) },
-      { label: '24h Volume', value: formatUsd(selected.volume24h) },
-      { label: '24h Txns', value: formatCount(selected.txns24h) },
+      { label: 'Liq', value: formatUsd(selected.liquidityUsd) },
+      { label: 'Vol 24h', value: formatUsd(selected.volume24h) },
+      { label: 'Txns 24h', value: formatCount(selected.txns24h) },
     ];
 
     if (selected.holders != null) {
@@ -709,25 +752,18 @@ export default function TokenChartPage() {
     return items;
   }, [selected]);
 
-  const lastCandle = candles.length > 0 ? candles[candles.length - 1] : null;
+  const lastCandle = displayedCandles.length > 0 ? displayedCandles[displayedCandles.length - 1] : null;
+  const lastUpdateLabel = lastFetchedAt != null
+    ? new Date(lastFetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '—';
   const recentMovements = tradeMovements.slice(0, 8);
 
   return (
     <div className="min-h-screen bg-black text-white">
       <header className="border-b border-white/10 px-3 py-3 sm:px-5">
-        <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center gap-3">
-          <Link href="/app" className="flex items-center gap-2 shrink-0">
-            <Image
-              src="/cletus-logo.png"
-              alt="Cletus"
-              width={34}
-              height={34}
-              className="object-contain"
-              priority
-            />
-            <span className="text-sm font-semibold uppercase tracking-[0.22em] text-white/90">
-              Chart
-            </span>
+        <div className="mx-auto flex w-full max-w-[1600px] flex-wrap items-center gap-3">
+          <Link href="/app" className="shrink-0 text-sm font-semibold tracking-[0.08em] text-white/90">
+            Cletus · Chart
           </Link>
 
           <div className="relative min-w-[260px] flex-1">
@@ -747,7 +783,7 @@ export default function TokenChartPage() {
                   selectToken(results[0]);
                 }
               }}
-              placeholder="Search symbol or mint address"
+              placeholder="search…"
               className="h-10 w-full border border-white/15 bg-black px-3 pr-10 text-sm text-white outline-none placeholder:text-white/35 focus:border-emerald-400 font-mono"
               autoComplete="off"
               spellCheck={false}
@@ -802,49 +838,36 @@ export default function TokenChartPage() {
         </div>
       </header>
 
-      <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-4 px-3 py-4 sm:px-5 sm:py-5">
+      <main className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-3 px-3 py-4 sm:px-5 sm:py-5">
         {error && <div className="border border-red-500/30 px-3 py-2 text-sm text-red-400">{error}</div>}
 
         {selected ? (
           <>
-            <section className="border border-white/10 bg-black px-4 py-4">
-              <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <section className="border border-white/10 bg-black px-4 py-3">
+              <div className="flex flex-wrap items-end justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-3">
-                    {selected.image ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={selected.image} alt="" className="h-11 w-11 rounded-full border border-white/10" />
-                    ) : (
-                      <div className="flex h-11 w-11 items-center justify-center border border-white/10 text-sm font-semibold">
-                        {(selected.symbol || '?').slice(0, 2)}
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <div className="truncate text-xs uppercase tracking-[0.18em] text-white/45">
-                        {selected.name}
-                      </div>
-                      <div className="font-mono text-3xl font-semibold tracking-tight sm:text-4xl">
-                        {selected.symbol} / {(selected.quoteSymbol || 'USDC').toUpperCase()}
-                      </div>
-                    </div>
+                  <div className="font-mono text-xl font-semibold tracking-tight sm:text-2xl">
+                    {selected.symbol} / USDC
                   </div>
-                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs uppercase tracking-[0.14em] text-white/50">
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-white/50">
                     <span>{selected.chain || 'Solana'}</span>
+                    <span>·</span>
                     <span>{selected.dex || 'Unknown DEX'}</span>
-                    <span className="font-mono">{truncateAddress(selected.address)}</span>
+                    <span>·</span>
+                    <span className="font-mono">mint {truncateAddress(selected.address)}</span>
                   </div>
                 </div>
 
                 <div className="text-left md:text-right">
-                  <div className="font-mono text-4xl font-semibold tracking-tight sm:text-5xl">
+                  <div className="font-mono text-2xl font-semibold tracking-tight sm:text-3xl">
                     {formatPriceDisplay(selected.priceUsd)}
                   </div>
                   <div
-                    className={`mt-1 font-mono text-lg ${
+                    className={`mt-1 font-mono text-sm ${
                       (selected.change24h ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
                     }`}
                   >
-                    {formatPercent(selected.change24h)}
+                    {formatPercent(selected.change24h)} 24h
                   </div>
                 </div>
               </div>
@@ -852,38 +875,62 @@ export default function TokenChartPage() {
 
             <section className="overflow-x-auto">
               <div
-                className="grid min-w-[720px] gap-px border border-white/10 bg-white/10"
-                style={{ gridTemplateColumns: `repeat(${metricItems.length || 1}, minmax(0, 1fr))` }}
+                className="min-w-[680px] border border-white/10"
               >
-                {metricItems.map((item) => (
-                  <div key={item.label} className="bg-black px-3 py-3">
-                    <div className="text-[10px] uppercase tracking-[0.18em] text-white/40">{item.label}</div>
-                    <div className="mt-1 font-mono text-sm text-white/90 sm:text-base">{item.value}</div>
-                  </div>
-                ))}
+                <div
+                  className="grid border-b border-white/10 bg-black text-[10px] uppercase tracking-[0.18em] text-white/40"
+                  style={{ gridTemplateColumns: `repeat(${metricItems.length || 1}, minmax(0, 1fr))` }}
+                >
+                  {metricItems.map((item) => (
+                    <div key={`${item.label}-header`} className="border-r border-white/10 px-3 py-2 last:border-r-0">
+                      {item.label}
+                    </div>
+                  ))}
+                </div>
+                <div
+                  className="grid bg-black"
+                  style={{ gridTemplateColumns: `repeat(${metricItems.length || 1}, minmax(0, 1fr))` }}
+                >
+                  {metricItems.map((item) => (
+                    <div key={item.label} className="border-r border-white/10 px-3 py-2.5 font-mono text-sm text-white/90 last:border-r-0 sm:text-base">
+                      {item.value}
+                    </div>
+                  ))}
+                </div>
               </div>
             </section>
 
-            <section className="flex flex-wrap gap-2">
-              {(Object.keys(RANGE_CONFIG) as Range[]).map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  onClick={() => setRange(item)}
-                  className={`border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.16em] transition-colors ${
-                    range === item
-                      ? 'border-emerald-400 text-emerald-400'
-                      : 'border-white/10 text-white/50 hover:border-white/35 hover:text-white'
-                  }`}
-                >
-                  {item}
-                </button>
-              ))}
+            <section className="flex flex-wrap items-center justify-between gap-2 border border-white/10 bg-black px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {(Object.keys(RANGE_CONFIG) as Range[]).map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => setRange(item)}
+                    aria-pressed={range === item}
+                    className={`px-2 py-1 font-mono text-xs uppercase tracking-[0.14em] transition-colors ${
+                      range === item
+                        ? 'text-emerald-400'
+                        : 'text-white/50 hover:text-white'
+                    }`}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1 text-xs">
+                <span className="border border-emerald-400/40 px-2.5 py-1 font-mono uppercase tracking-[0.14em] text-emerald-400/85">
+                  Price
+                </span>
+                <span className="border border-white/10 px-2.5 py-1 font-mono uppercase tracking-[0.14em] text-white/35">
+                  Mcap soon
+                </span>
+              </div>
             </section>
 
             <section className="border border-white/10 bg-black">
-              <div className="relative min-h-[240px] w-full md:min-h-[320px]">
-                <div ref={chartContainerRef} className="h-[240px] w-full md:h-[320px]" />
+              <div className="relative min-h-[320px] w-full md:min-h-[460px]">
+                <div ref={chartContainerRef} className="h-[320px] w-full md:h-[460px]" />
                 {chartLoading && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/75 font-mono text-sm text-white/45">
                     Loading candles…
@@ -903,7 +950,9 @@ export default function TokenChartPage() {
                   <span>L {lastCandle ? formatPrice(lastCandle.low) : '—'}</span>
                   <span>C {lastCandle ? formatPrice(lastCandle.close) : '—'}</span>
                 </div>
-                <div className="font-mono text-white/45">SOURCE {chartSource}</div>
+                <div className="font-mono text-white/45">
+                  last update {lastUpdateLabel} · source {chartSource}
+                </div>
               </div>
             </section>
 
