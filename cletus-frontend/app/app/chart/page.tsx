@@ -92,49 +92,52 @@ function truncateAddress(value?: string) {
 function normalizeCandles(input: unknown): Candle[] {
   if (!Array.isArray(input)) return [];
 
-  const mapped = input
-    .map((item) => {
-      if (!item || typeof item !== 'object') return null;
-      const raw = item as CandleLike;
-      const rawTime = typeof raw.time === 'string' ? Number(raw.time) : raw.time;
-      const open = typeof raw.open === 'number' ? raw.open : Number(raw.open);
-      const high = typeof raw.high === 'number' ? raw.high : Number(raw.high);
-      const low = typeof raw.low === 'number' ? raw.low : Number(raw.low);
-      const close = typeof raw.close === 'number' ? raw.close : Number(raw.close);
-      const volume =
-        typeof raw.volume === 'number'
-          ? raw.volume
-          : raw.volume == null
-            ? undefined
-            : Number(raw.volume);
+  const mapped: Candle[] = [];
+  for (const item of input) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as CandleLike;
+    const rawTimeCandidate = typeof raw.time === 'string' ? Number(raw.time) : raw.time;
+    const rawTime = typeof rawTimeCandidate === 'number' ? rawTimeCandidate : NaN;
+    const open = typeof raw.open === 'number' ? raw.open : Number(raw.open);
+    const high = typeof raw.high === 'number' ? raw.high : Number(raw.high);
+    const low = typeof raw.low === 'number' ? raw.low : Number(raw.low);
+    const close = typeof raw.close === 'number' ? raw.close : Number(raw.close);
+    const volume =
+      typeof raw.volume === 'number'
+        ? raw.volume
+        : raw.volume == null
+          ? undefined
+          : Number(raw.volume);
 
-      if (
-        !Number.isFinite(rawTime) ||
-        !Number.isFinite(open) ||
-        !Number.isFinite(high) ||
-        !Number.isFinite(low) ||
-        !Number.isFinite(close)
-      ) {
-        return null;
-      }
+    if (
+      !Number.isFinite(rawTime) ||
+      !Number.isFinite(open) ||
+      !Number.isFinite(high) ||
+      !Number.isFinite(low) ||
+      !Number.isFinite(close)
+    ) {
+      continue;
+    }
 
-      const time = Math.floor(rawTime > 1e12 ? rawTime / 1000 : rawTime);
-      if (!Number.isFinite(time) || time <= 0) return null;
+    const time = Math.floor(rawTime >= 1e12 ? rawTime / 1000 : rawTime);
+    if (!Number.isFinite(time) || time <= 0) continue;
 
-      const upper = Math.max(open, high, low, close);
-      const lower = Math.min(open, high, low, close);
+    const candle: Candle = {
+      time,
+      open,
+      high: Math.max(open, high, low, close),
+      low: Math.min(open, high, low, close),
+      close,
+    };
 
-      return {
-        time,
-        open,
-        high: upper,
-        low: lower,
-        close,
-        volume: Number.isFinite(volume) ? volume : undefined,
-      } satisfies Candle;
-    })
-    .filter((item): item is Candle => Boolean(item))
-    .sort((a, b) => a.time - b.time);
+    if (Number.isFinite(volume)) {
+      candle.volume = volume;
+    }
+
+    mapped.push(candle);
+  }
+
+  mapped.sort((a, b) => a.time - b.time);
 
   const deduped: Candle[] = [];
   for (const candle of mapped) {
