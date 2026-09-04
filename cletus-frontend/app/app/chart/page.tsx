@@ -426,12 +426,12 @@ export default function TokenChartPage() {
 
       const data = await res.json();
       const normalizedMint = mint.trim().toLowerCase();
-      const open = Array.isArray(data.open)
+      const open: OpenTradePosition[] = Array.isArray(data.open)
         ? data.open
             .map(normalizeTradePosition)
             .filter((item: OpenTradePosition | null): item is OpenTradePosition => Boolean(item))
         : [];
-      const closed = Array.isArray(data.closed)
+      const closed: ClosedTradePosition[] = Array.isArray(data.closed)
         ? data.closed
             .map(normalizeClosedTradePosition)
             .filter((item: ClosedTradePosition | null): item is ClosedTradePosition => Boolean(item))
@@ -451,7 +451,6 @@ export default function TokenChartPage() {
           text: 'BUY',
           timestamp: position.openedAt,
           price: position.entryPrice,
-          pnlUsd: position.pnlUsd,
           isDryRun: position.isDryRun,
         })),
         ...closedForToken.map((position) => {
