@@ -24,6 +24,46 @@ type TokenSignal = {
   note: string;
 };
 
+type ApiSignal = Partial<{
+  id: string;
+  base: string;
+  symbol: string;
+  tokenName: string;
+  side: 'LONG' | 'SHORT' | string;
+  direction: 'LONG' | 'SHORT' | string;
+  score: number | string;
+  compositeScore: number;
+  change24h: number | string;
+  priceChange24h: number;
+  signals: string[];
+  strength: 'WEAK' | 'MODERATE' | 'STRONG' | 'EXTREME';
+}>;
+
+function toNumber(value: unknown, fallback = 0) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : fallback;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+  return fallback;
+}
+
+function toText(value: unknown, fallback = '???') {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function pickSymbol(s: ApiSignal) {
+  const direct = toText(s.base ?? s.symbol, '');
+  if (direct) return direct.toUpperCase();
+
+  const fromTokenName = toText(s.tokenName, '');
+  if (/^[a-z0-9$._-]{1,12}$/i.test(fromTokenName)) {
+    return fromTokenName.toUpperCase();
+  }
+
+  return '???';
+}
+
 const FALLBACK_SIGNALS: TokenSignal[] = [
   { id: '1', symbol: 'SOL', side: 'LONG', score: 88, change24h: 4.2, note: 'Momentum · volume up' },
   { id: '2', symbol: 'BONK', side: 'LONG', score: 81, change24h: 12.5, note: 'Breakout watch' },
@@ -68,27 +108,28 @@ export default function CletusAIPage() {
         const res = await fetch('/api/signals?quote=USDC&limit=8');
         if (res.ok) {
           const data = await res.json();
-          const list = (data.signals ?? []).slice(0, 8).map(
-            (
-              s: {
-                id?: string;
-                base?: string;
-                symbol?: string;
-                side?: string;
-                score?: number;
-                change24h?: number;
-                signals?: string[];
-              },
-              i: number
-            ) => ({
+          const list = (data.signals ?? []).slice(0, 8).map((s: ApiSignal, i: number) => {
+            const rawScore = toNumber(s.score ?? s.compositeScore);
+            const tags = Array.isArray((s as { signals?: unknown }).signals)
+              ? ((s as { signals: unknown[] }).signals.filter(
+                  (x): x is string => typeof x === 'string',
+                ) ?? [])
+              : [];
+
+            return {
               id: s.id ?? String(i),
-              symbol: s.base ?? s.symbol ?? '???',
-              side: (s.side === 'SHORT' ? 'SHORT' : 'LONG') as 'LONG' | 'SHORT',
-              score: s.score ?? 0,
-              change24h: s.change24h ?? 0,
-              note: Array.isArray(s.signals) ? s.signals.join(' · ') : 'Signal',
-            })
-          );
+              symbol: pickSymbol(s),
+              side: (s.side === 'SHORT' || s.direction === 'SHORT' ? 'SHORT' : 'LONG') as
+                | 'LONG'
+                | 'SHORT',
+              score:
+                rawScore >= 0 && rawScore <= 1
+                  ? Math.round(rawScore * 100)
+                  : Math.round(rawScore),
+              change24h: toNumber(s.change24h ?? s.priceChange24h),
+              note: tags.length ? tags.join(' · ') : s.strength ?? 'Signal',
+            };
+          });
           if (list.length) setSignals(list);
         }
       } catch {
