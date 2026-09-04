@@ -223,7 +223,10 @@ export default function TokenChartPage() {
             holders: typeof item.holders === 'number' ? item.holders : undefined,
             dex: typeof item.dex === 'string' ? item.dex : 'Unknown',
             chain: typeof item.chain === 'string' ? item.chain : 'Solana',
-            quoteSymbol: 'USDC',
+            quoteSymbol:
+              typeof item.quoteSymbol === 'string' && item.quoteSymbol.trim()
+                ? item.quoteSymbol.trim().toUpperCase()
+                : 'USDC',
             pairAddress: typeof item.pairAddress === 'string' ? item.pairAddress : undefined,
           } satisfies TokenResult;
         })
@@ -238,7 +241,7 @@ export default function TokenChartPage() {
     }
   }, []);
 
-  const loadChart = useCallback(async (mint: string, symbol: string, nextRange: Range) => {
+  const loadChart = useCallback(async (mint: string, symbol: string, quoteSymbol: string, nextRange: Range) => {
     if (!mint) {
       setCandles([]);
       setError('Token mint missing. Pick a different token.');
@@ -253,7 +256,7 @@ export default function TokenChartPage() {
     try {
       const params = new URLSearchParams({
         mint,
-        pair: `${symbol.toUpperCase()}/USDC`,
+        pair: `${symbol.toUpperCase()}/${quoteSymbol.toUpperCase()}`,
         timeframe: config.timeframe,
         count: config.count,
       });
@@ -275,7 +278,10 @@ export default function TokenChartPage() {
               ...prev,
               priceUsd: typeof data.currentPrice === 'number' ? data.currentPrice : prev.priceUsd,
               change24h: typeof data.change24h === 'number' ? data.change24h : prev.change24h,
-              quoteSymbol: 'USDC',
+              quoteSymbol:
+                typeof data.quoteSymbol === 'string' && data.quoteSymbol.trim()
+                  ? data.quoteSymbol.trim().toUpperCase()
+                  : prev.quoteSymbol || quoteSymbol,
             }
           : prev
       );
@@ -288,7 +294,8 @@ export default function TokenChartPage() {
   }, []);
 
   const selectToken = useCallback((token: TokenResult) => {
-    setSelected({ ...token, quoteSymbol: 'USDC' });
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    setSelected({ ...token, quoteSymbol: token.quoteSymbol || 'USDC' });
     setResults([]);
     setQuery(token.symbol || token.name);
     setHasSearched(false);
@@ -298,10 +305,11 @@ export default function TokenChartPage() {
   useEffect(() => {
     const mint = selected?.address?.trim();
     const symbol = selected?.symbol?.trim();
+    const quoteSymbol = selected?.quoteSymbol?.trim();
     if (mint && symbol) {
-      void loadChart(mint, symbol, range);
+      void loadChart(mint, symbol, quoteSymbol || 'USDC', range);
     }
-  }, [loadChart, range, selected?.address, selected?.symbol]);
+  }, [loadChart, range, selected?.address, selected?.quoteSymbol, selected?.symbol]);
 
   useEffect(() => () => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -561,7 +569,7 @@ export default function TokenChartPage() {
                         {selected.name}
                       </div>
                       <div className="font-mono text-3xl font-semibold tracking-tight sm:text-4xl">
-                        {selected.symbol} / USDC
+                        {selected.symbol} / {(selected.quoteSymbol || 'USDC').toUpperCase()}
                       </div>
                     </div>
                   </div>
