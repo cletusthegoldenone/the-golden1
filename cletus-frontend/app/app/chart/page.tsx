@@ -66,13 +66,13 @@ type TradeMovement = {
 };
 
 const RANGE_CONFIG: Record<Range, { timeframe: string; count: string }> = {
-  '1m': { timeframe: '1m', count: '120' },
-  '5m': { timeframe: '5m', count: '120' },
-  '15m': { timeframe: '15m', count: '120' },
-  '1H': { timeframe: '1h', count: '120' },
-  '4H': { timeframe: '4h', count: '120' },
-  '1D': { timeframe: '1d', count: '90' },
-  '1W': { timeframe: '1w', count: '104' },
+  '1m': { timeframe: '1m', count: '200' },
+  '5m': { timeframe: '5m', count: '200' },
+  '15m': { timeframe: '15m', count: '200' },
+  '1H': { timeframe: '1h', count: '200' },
+  '4H': { timeframe: '4h', count: '200' },
+  '1D': { timeframe: '1d', count: '200' },
+  '1W': { timeframe: '1w', count: '200' },
 };
 
 const DEFAULT_SYMBOL = 'BONK';
@@ -423,7 +423,7 @@ export default function TokenChartPage() {
     }
   }, [fetchTokenResults]);
 
-  const loadChart = useCallback(async (mint: string, symbol: string, quoteSymbol: string, nextRange: Range) => {
+  const loadChart = useCallback(async (mint: string, symbol: string, nextRange: Range) => {
     if (!mint) {
       setCandles([]);
       setLastFetchedAt(null);
@@ -440,7 +440,7 @@ export default function TokenChartPage() {
     try {
       const params = new URLSearchParams({
         mint,
-        pair: `${symbol.toUpperCase()}/${quoteSymbol.toUpperCase()}`,
+        pair: `${symbol.toUpperCase()}/USDC`,
         timeframe: config.timeframe,
         count: config.count,
       });
@@ -467,7 +467,7 @@ export default function TokenChartPage() {
               quoteSymbol:
                 typeof data.quoteSymbol === 'string' && data.quoteSymbol.trim()
                   ? data.quoteSymbol.trim().toUpperCase()
-                  : prev.quoteSymbol || quoteSymbol,
+                  : prev.quoteSymbol || 'USDC',
             }
           : prev
       );
@@ -563,11 +563,10 @@ export default function TokenChartPage() {
   useEffect(() => {
     const mint = selected?.address?.trim();
     const symbol = selected?.symbol?.trim();
-    const quoteSymbol = selected?.quoteSymbol?.trim();
     if (mint && symbol) {
-      void loadChart(mint, symbol, quoteSymbol || 'USDC', range);
+      void loadChart(mint, symbol, range);
     }
-  }, [loadChart, range, selected?.address, selected?.quoteSymbol, selected?.symbol]);
+  }, [loadChart, range, selected?.address, selected?.symbol]);
 
   useEffect(() => {
     const mint = selected?.address?.trim();
@@ -1008,7 +1007,7 @@ export default function TokenChartPage() {
                 )}
                 {!chartLoading && candles.length === 0 && (
                   <div className="absolute inset-0 flex items-center justify-center px-4 text-center font-mono text-sm text-white/35">
-                    No candle data available for this token.
+                    No OHLC data
                   </div>
                 )}
               </div>
